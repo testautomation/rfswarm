@@ -1,36 +1,36 @@
-[Index](README.md)
-
-## AUT Monitoring
+# AUT Monitoring
+[Return to Index](README.md)
 
 The ability to monitor your Application Under Test (AUT) servers and store the monitoring data in the test results has been available as part of the rfswarm Manager since version v0.6.3 and was introduced from feature request #72.
 
 With feature release v0.8.0 this became more useful as you could use the live graphs to monitor this data during a test, and now with release 1.0.0 you can easily include this information in your test reports.
 
-- [Overview](#Overview)
-- [Recomendations](#Recomendations)
+- [Overview](#overview)
+- [Recomendations](#recomendations)
 - [Unix AUT Example](#unix-linux-aut-example)
-- [Windows AUT Example](#Windows-AUT-Example)
+- [Windows AUT Example](#windows-aut-example)
 
-### Overview
+## Overview
 
 While it may not be obvious at first the process for monitoring and reporting the performance data of your AUT is quite simple and quite flexible.
 
 1. Create a robot framework test case that connects to your AUT server and gathers the performance data you are interested in collecting, as a minimum you will probably want to collect CPU, Memory and Disk IO Information, you may also want to collect network IO, and then depending on the type of server you are monitoring there may be other details you want to monitor.
 1. report the details back to the manager using the rfswarm API [POST /Metric](Agent_Communication.md#post-metric)
-1. to make this easier the variable `${RFS_SWARMMANAGER}` as documented in the [Swarm Manager](Preparing_for_perf.md#swarm-manager) section of [Useful Variables](Preparing_for_perf.md#useful-variables), can be used to avoid hard coding the manager details.
+1. to make this easier the variable `${RFS_SWARMMANAGER}` as documented in the [Swarm Manager](Preparing_for_perf.md#swarm-manager) section of [Useful Variables](Preparing_for_perf.md#useful-variables), can be used to avoid hardcoding the manager details.
 
 ### Recomendations
 
-- Set up an agent machine in your data center(s) in the same network as your AUT servers to be dedicated to the task of monitoring servers. Configure the agent with a custom property that identifys the agent e.g. "Monitor" or the <datacentre name>. when configuring your test scenario configure the [additional settings > agent filter](https://github.com/damies13/rfswarm/blob/master/Doc/rfswarm_manager.md#agent-filter) for the monitoring robots to require this property and configure the other robots to exclude this property.
+- Set up an agent machine in your data center(s) in the same network as your AUT servers to be dedicated to the task of monitoring servers.
+Configure the agent with a custom property that identifys the agent e.g. "Monitor" or the <datacentre name>. when configuring your test scenario configure the [additional settings > agent filter](https://github.com/damies13/rfswarm/blob/master/Doc/rfswarm_manager.md#agent-filter) for the monitoring robots to require this property and configure the other robots to exclude this property.
 
 ### Unix (Linux) AUT Example
 
-The robot file below is an example of connecting to a unix (linux) AUT server via a SSH session using the robot framework SSH library, collecting a variety of statistics from the AUT server and then posting those details to the Manager API using the robot framework Requests Library.
+The robot file below is an example of connecting to a Unix (Linux) AUT server via a SSH session using the robot framework SSH library, collecting a variety of statistics from the AUT server and then posting those details to the Manager API using the robot framework Requests Library.
 
 This example may work for you, or you may need to modify it to work with the OS that your AUT uses. It is not intended as a ready to use example, but rather a starting point to help you build a monitoring script for your AUT.
 
 ssh_example.robot
-```robotframework
+```.robot
 *** Settings ***
 
 Library                SSHLibrary
@@ -195,6 +195,7 @@ Post AUT Stats
 	Run Keyword Unless 	${exists} 	Create Session	rfs 	${RFS_SWARMMANAGER}
 
 	${data}=	Create Dictionary
+	Set To Dictionary	${data} 	AgentName				${RFS_AGENTNAME}
 	Set To Dictionary	${data} 	PrimaryMetric		${AUT}
 	Set To Dictionary	${data} 	MetricType			${AUTType}
 	Set To Dictionary	${data} 	MetricTime			${AUTTime}
@@ -266,15 +267,15 @@ Open Connection And Log In
 
 Collect Stats
 	[Arguments] 	${HOST}=${HOST}
-	
+
 	${stats}=	Create Dictionary
-	
+
 	${key} 	${Value}= 	Get Counter 	Memory\\% Committed Bytes In Use 	${HOST}
 	Set To Dictionary	${stats} 	${key}		${Value}
-	
+
 	${key} 	${Value}= 	Get Counter 	Processor\\_Total\\% Processor Time 	${HOST}
 	Set To Dictionary	${stats} 	${key}		${Value}
-	
+
 	${key} 	${Value}= 	Get Counter 	System\\Processor Queue Length 	${HOST}
 	Set To Dictionary	${stats} 	${key}		${Value}
 
@@ -291,6 +292,7 @@ Post AUT Stats
 	Run Keyword Unless 	${exists} 	Create Session	rfs 	${RFS_SWARMMANAGER}
 
 	${data}=	Create Dictionary
+	Set To Dictionary	${data} 	AgentName				${RFS_AGENTNAME}
 	Set To Dictionary	${data} 	PrimaryMetric		${AUT}
 	Set To Dictionary	${data} 	MetricType			${AUTType}
 	Set To Dictionary	${data} 	MetricTime			${AUTTime}

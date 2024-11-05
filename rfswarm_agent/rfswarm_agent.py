@@ -1,47 +1,44 @@
 #!/usr/bin/python
 #
-#	Robot Framework Swarm
+# 	Robot Framework Swarm
 #
-#    Version1.0.3"
+#    Version 1.4.0
 #
 
 
 # https://stackoverflow.com/questions/48090535/csv-file-reading-and-find-the-value-from-nth-column-using-robot-framework
 
-import sys
+import argparse
+import base64
+import configparser
+import gc
+import hashlib
+import importlib.metadata
+import inspect
+import json
+import lzma
 import os
 import platform
-import tempfile
-import configparser
-
-import hashlib
-import lzma
-import base64
-
-
-
-# import robot
-import pkg_resources
 import random
-import time
-from datetime import datetime
-import threading
-import subprocess
-import requests
-import psutil
-# import platform
-import socket
-import json
-import xml.etree.ElementTree as ET
 import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from typing import Any
 
-import argparse
-import inspect
+import psutil
+import requests
 
 
 class RFSwarmAgent():
 
-	version = "1.0.3"
+	version = "1.4.0"
 	config = None
 	isconnected = False
 	isrunning = False
@@ -54,22 +51,27 @@ class RFSwarmAgent():
 	logdir = None
 	agentini = None
 	listenerfile = None
-	ipaddresslist = []
+	repeaterfile = None
+	ipaddresslist: Any = []
 	agentname = None
-	agentproperties = {}
+	agentproperties: Any = {}
 	netpct = 0
 	mainloopinterval = 10
-	scriptlist = {}
-	jobs = {}
-	corethreads = {}
-	upload_queue = []
+	scriptlist: Any = {}
+	jobs: Any = {}
+	corethreads: Any = {}
+	upload_queue: Any = []
+	upload_threads: Any = {}
+	download_queue: Any = []
+	download_threads: Any = {}
 	robotcount = 0
 	status = "Ready"
-	excludelibraries = []
+	excludelibraries: Any = []
 	args = None
 	xmlmode = False
-	timeout=600
+	timeout = 600
 	uploadmode = "err"
+	managedenvvars: Any = []
 
 	debuglvl = 0
 
@@ -91,6 +93,7 @@ class RFSwarmAgent():
 		parser.add_argument('-x', '--xmlmode', help='XML Mode, fall back to pasing the output.xml after each iteration', action='store_true')
 		parser.add_argument('-a', '--agentname', help='Set agent name')
 		parser.add_argument('-p', '--property', help='Add a custom property, if multiple properties are required use this argument for each property e.g. -p property1 -p "Property 2"', action='append')
+		parser.add_argument('-c', '--create', help='ICON : Create application icon / shortcut')
 		self.args = parser.parse_args()
 
 		self.debugmsg(6, "self.args: ", self.args)
@@ -98,10 +101,15 @@ class RFSwarmAgent():
 		if self.args.debug:
 			self.debuglvl = int(self.args.debug)
 
-
 		if self.args.version:
 			exit()
 
+		if self.args.create:
+			if self.args.create.upper() in ["ICON", "ICONS"]:
+				self.create_icons()
+			else:
+				self.debugmsg(0, "create with option ", self.args.create.upper(), "not supported.")
+			exit()
 
 		self.config = configparser.ConfigParser()
 
@@ -117,7 +125,6 @@ class RFSwarmAgent():
 
 		if self.args.agentname:
 			self.agentname = self.args.agentname
-
 
 		if 'Agent' not in self.config:
 			self.config['Agent'] = {}
@@ -155,7 +162,6 @@ class RFSwarmAgent():
 		self.logdir = os.path.join(self.agentdir, "logs")
 		self.ensuredir(self.logdir)
 
-
 		if 'excludelibraries' not in self.config['Agent']:
 			self.config['Agent']['excludelibraries'] = "BuiltIn,String,OperatingSystem,perftest"
 			self.saveini()
@@ -164,39 +170,30 @@ class RFSwarmAgent():
 		self.excludelibraries = self.config['Agent']['excludelibraries'].split(",")
 		self.debugmsg(6, "self.excludelibraries:", self.excludelibraries)
 
-
 		if 'properties' not in self.config['Agent']:
 			self.config['Agent']['properties'] = ""
 			self.saveini()
 
-
+		self.findlibraries() 	# Need to wait for findlibraries() to finish before calling ensure_listner_file() for RF version check
 		self.ensure_listner_file()
+		self.ensure_repeater_listner_file()
 
-		t = threading.Thread(target=self.tick_counter)
-		t.start()
-
-		t = threading.Thread(target=self.findlibraries)
-		t.start()
-
-
-
-		self.agentproperties["OS: Platform"] = platform.platform()	# 'Linux-3.3.0-8.fc16.x86_64-x86_64-with-fedora-16-Verne'
-		self.agentproperties["OS: System"] = platform.system()   # 'Windows'
+		self.agentproperties["OS: Platform"] = platform.platform()  # 'Linux-3.3.0-8.fc16.x86_64-x86_64-with-fedora-16-Verne'
+		self.agentproperties["OS: System"] = platform.system()  # 'Windows'		Returns the system/OS name, such as 'Linux', 'Darwin', 'Java', 'Windows'
 		self.agentproperties["OS: Release"] = platform.release()  # 'XP'
 		self.agentproperties["OS: Version"] = platform.version()  # '5.1.2600'
 
 		if platform.system() == 'Windows':
-			vararr= platform.version().split(".")
+			vararr = platform.version().split(".")
 		else:
-			vararr= platform.release().split(".")
+			vararr = platform.release().split(".")
 
-		if len(vararr)>0:
+		if len(vararr) > 0:
 			self.agentproperties["OS: Version: Major"] = "{}".format(int(vararr[0]))
-		if len(vararr)>1:
+		if len(vararr) > 1:
 			self.agentproperties["OS: Version: Minor"] = "{}.{}".format(int(vararr[0]), int(vararr[1]))
 
-
-		if 'properties' in self.config['Agent'] and len(self.config['Agent']['properties'])>0:
+		if 'properties' in self.config['Agent'] and len(self.config['Agent']['properties']) > 0:
 			if "," in self.config['Agent']['properties']:
 				proplist = self.config['Agent']['properties'].split(",")
 				for prop in proplist:
@@ -211,6 +208,252 @@ class RFSwarmAgent():
 
 		self.debugmsg(9, "self.agentproperties: ", self.agentproperties)
 
+	def create_icons(self):
+		self.debugmsg(0, "Creating application icons for RFSwarm Agent")
+		appname = "RFSwarm Agent"
+		namelst = appname.split()
+		self.debugmsg(6, "namelst:", namelst)
+		projname = "-".join(namelst).lower()
+		self.debugmsg(6, "projname:", projname)
+		pipdata = importlib.metadata.distribution(projname)
+		# print("files:", pipdata.files)
+		# print("file0:", pipdata.files[0])
+		agent_executable = os.path.abspath(str(pipdata.locate_file(pipdata.files[0])))
+		self.debugmsg(5, "agent_executable:", agent_executable)
+
+		script_dir = os.path.dirname(os.path.abspath(__file__))
+		self.debugmsg(5, "script_dir:", script_dir)
+		icon_dir = os.path.join(pipdata.locate_file('rfswarm_agent'), "icons")
+		self.debugmsg(5, "icon_dir:", icon_dir)
+
+		if platform.system() == 'Linux':
+			fileprefix = "~/.local/share"
+			if os.access("/usr/share", os.W_OK):
+				fileprefix = "/usr/share"
+
+			fileprefix = os.path.expanduser(fileprefix)
+
+			self.debugmsg(5, "Create .directory file")
+			directorydata = []
+			directorydata.append('[Desktop Entry]\n')
+			directorydata.append('Type=Directory\n')
+			directorydata.append('Name=RFSwarm\n')
+			directorydata.append('Icon=rfswarm-logo\n')
+
+			directoryfilename = os.path.join(fileprefix, "desktop-directories", "rfswarm.directory")
+			directorydir = os.path.dirname(directoryfilename)
+			self.ensuredir(directorydir)
+
+			self.debugmsg(5, "directoryfilename:", directoryfilename)
+			with open(directoryfilename, 'w') as df:
+				df.writelines(directorydata)
+
+			directoryfilename = os.path.join(fileprefix, "applications", "rfswarm.directory")
+			directorydir = os.path.dirname(directoryfilename)
+			self.ensuredir(directorydir)
+			self.debugmsg(5, "directoryfilename:", directoryfilename)
+			with open(directoryfilename, 'w') as df:
+				df.writelines(directorydata)
+
+			self.debugmsg(5, "Create .desktop file")
+			desktopdata = []
+			desktopdata.append('[Desktop Entry]\n')
+			desktopdata.append('Name=' + appname + '\n')
+			desktopdata.append('Exec=' + agent_executable + '\n')
+			desktopdata.append('Terminal=true\n')
+			desktopdata.append('Type=Application\n')
+			desktopdata.append('Icon=' + projname + '\n')
+			desktopdata.append('Categories=RFSwarm;Development;\n')
+			desktopdata.append('Keywords=rfswarm;agent;\n')
+			# desktopdata.append('\n')
+
+			dektopfilename = os.path.join(fileprefix, "applications", projname + ".desktop")
+			dektopdir = os.path.dirname(dektopfilename)
+			self.ensuredir(dektopdir)
+
+			self.debugmsg(5, "dektopfilename:", dektopfilename)
+			with open(dektopfilename, 'w') as df:
+				df.writelines(desktopdata)
+
+			self.debugmsg(5, "Copy icons")
+			# /usr/share/icons/hicolor/128x128/apps/
+			# 	1024x1024  128x128  16x16  192x192  22x22  24x24  256x256  32x32  36x36  42x42  48x48  512x512  64x64  72x72  8x8  96x96
+			# or
+			#  ~/.local/share/icons/hicolor/256x256/apps/
+			src_iconx128 = os.path.join(icon_dir, projname + "-128.png")
+			self.debugmsg(5, "src_iconx128:", src_iconx128)
+			dst_iconx128 = os.path.join(fileprefix, "icons", "hicolor", "128x128", "apps", projname + ".png")
+			dst_icondir = os.path.dirname(dst_iconx128)
+			self.ensuredir(dst_icondir)
+			self.debugmsg(5, "dst_iconx128:", dst_iconx128)
+			shutil.copy(src_iconx128, dst_iconx128)
+
+			src_iconx128 = os.path.join(icon_dir, "rfswarm-logo-128.png")
+			self.debugmsg(5, "src_iconx128:", src_iconx128)
+			dst_iconx128 = os.path.join(fileprefix, "icons", "hicolor", "128x128", "apps", "rfswarm-logo.png")
+			self.debugmsg(5, "dst_iconx128:", dst_iconx128)
+			shutil.copy(src_iconx128, dst_iconx128)
+
+		if platform.system() == 'Darwin':
+			self.debugmsg(5, "Create folder structure in /Applications")
+			src_iconx1024 = os.path.join(icon_dir, projname + "-1024.png")
+
+			self.create_macos_app_bundle(appname, pipdata.version, agent_executable, src_iconx1024)
+
+		if platform.system() == 'Windows':
+			self.debugmsg(5, "Create Startmenu shorcuts")
+			roam_appdata = os.environ["APPDATA"]
+			scutpath = os.path.join(roam_appdata, "Microsoft", "Windows", "Start Menu", appname + ".lnk")
+			src_iconx128 = os.path.join(icon_dir, projname + "-128.ico")
+
+			self.create_windows_shortcut(scutpath, agent_executable, src_iconx128, "Connects to Manager and runs robots", True)
+
+	def create_windows_shortcut(self, scutpath, targetpath, iconpath, desc, minimised=False):
+		pslst = []
+
+		directorydir = os.path.dirname(scutpath)
+		self.ensuredir(directorydir)
+
+		pslst.append("$wshshell = New-Object -COMObject wscript.shell")
+		pslst.append('$scut = $wshshell.CreateShortcut("""' + scutpath + '""")')
+		pslst.append('$scut.TargetPath = """' + targetpath + '"""')
+		pslst.append('$scut.IconLocation = """' + iconpath + '"""')
+		if minimised:
+			pslst.append("$scut.WindowStyle = 7")
+		pslst.append("$scut.Description = '" + desc + "'")
+		pslst.append("$scut.Save()")
+
+		psscript = '; '.join(pslst)
+		self.debugmsg(6, "psscript:", psscript)
+
+		response = os.popen('powershell.exe -command ' + psscript).read()
+
+		self.debugmsg(6, "response:", response)
+
+	def create_macos_app_bundle(self, name, version, exesrc, icosrc):
+
+		appspath = "~/Applications"
+		if os.access("/Applications", os.W_OK):
+			appspath = "/Applications"
+
+		appspath = os.path.expanduser(appspath)
+
+		# https://stackoverflow.com/questions/7404792/how-to-create-mac-application-bundle-for-python-script-via-python
+
+		apppath = os.path.join(appspath, name + ".app")
+		MacOSFolder = os.path.join(apppath, "Contents", "MacOS")
+		self.ensuredir(MacOSFolder)
+
+		# need to create the icon file:
+		# https://stackoverflow.com/questions/646671/how-do-i-set-the-icon-for-my-applications-mac-os-x-app-bundle
+		namelst = name.split()
+		self.debugmsg(6, "namelst:", namelst)
+		projname = "-".join(namelst).lower()
+		self.debugmsg(6, "projname:", projname)
+		signature = "RFS{0}".format(namelst[1].upper())
+		self.debugmsg(6, "signature:", signature)
+
+		ResourcesFolder = os.path.join(apppath, "Contents", "Resources")
+		iconset = os.path.join(ResourcesFolder, projname + ".iconset")
+		icnsfile = os.path.join(ResourcesFolder, projname + ".icns")
+		self.ensuredir(iconset)
+
+		# Normal screen icons
+		self.debugmsg(6, "Normal screen icons")
+		for size in [16, 32, 64, 128, 256, 512]:
+			cmd = "sips -z {0} {0} {1} --out '{2}/icon_{0}x{0}.png'".format(size, icosrc, iconset)
+			self.debugmsg(6, "cmd:", cmd)
+			response = os.popen(cmd).read()
+			self.debugmsg(6, "response:", response)
+
+		# Retina display icons
+		self.debugmsg(6, "Retina display icons")
+		for size in [32, 64, 128, 256, 512, 1024]:
+			cmd = "sips -z {0} {0} {1} --out '{2}/icon_{3}x{3}x2.png'".format(size, icosrc, iconset, int(size / 2))
+			self.debugmsg(6, "cmd:", cmd)
+			response = os.popen(cmd).read()
+			self.debugmsg(6, "response:", response)
+
+		# Make a multi-resolution Icon
+		self.debugmsg(6, "Make a multi-resolution Icon")
+		cmd = "iconutil -c icns -o '{0}' '{1}'".format(icnsfile, iconset)
+		self.debugmsg(6, "cmd:", cmd)
+		response = os.popen(cmd).read()
+		self.debugmsg(6, "response:", response)
+
+		#  create apppath + "/Contents/Info.plist"
+		bundleName = name
+		bundleIdentifier = "org.rfswarm." + projname
+
+		# https://stackoverflow.com/questions/1596945/building-osx-app-bundle
+		# Found 2 issues:
+		# 	- <xml and <plist wasn't closed with > and xml was missing encoding
+		# 	- APPL???? --> RFS<SIGNATURE_NAME>
+
+		Infoplist = os.path.join(apppath, "Contents", "Info.plist")
+		with open(Infoplist, "w") as f:
+			f.write("""<?xml version="1.0" encoding="UTF-8"?>
+			<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+			<plist version="1.0">
+			<dict>
+				<key>CFBundleDevelopmentRegion</key>
+				<string>English</string>
+				<key>CFBundleExecutable</key>
+				<string>%s</string>
+				<key>CFBundleGetInfoString</key>
+				<string>%s</string>
+				<key>CFBundleIconFile</key>
+				<string>%s.icns</string>
+				<key>CFBundleIdentifier</key>
+				<string>%s</string>
+				<key>CFBundleInfoDictionaryVersion</key>
+				<string>6.0</string>
+				<key>CFBundleName</key>
+				<string>%s</string>
+				<key>CFBundlePackageType</key>
+				<string>APPL</string>
+				<key>CFBundleShortVersionString</key>
+				<string>%s</string>
+				<key>CFBundleSignature</key>
+				<string>%s</string>
+				<key>CFBundleVersion</key>
+				<string>%s</string>
+				<key>NSAppleScriptEnabled</key>
+				<string>YES</string>
+				<key>NSMainNibFile</key>
+				<string>MainMenu</string>
+				<key>NSPrincipalClass</key>
+				<string>NSApplication</string>
+			</dict>
+			</plist>
+			""" % (projname, bundleName + " " + version, projname, bundleIdentifier, bundleName, version, signature, version))
+			f.close()
+
+		# create apppath + "/Contents/PkgInfo"
+		PkgInfo = os.path.join(apppath, "Contents", "PkgInfo")
+		with open(PkgInfo, "w") as f:
+			f.write("APPL%s" % signature)
+			f.close()
+
+		# apppath + "/Contents/MacOS/main.py"
+		execbundle = os.path.join(apppath, "Contents", "MacOS", projname)
+		if os.path.exists(execbundle):
+			os.remove(execbundle)
+		os.symlink(exesrc, execbundle)
+
+		# touch '/Applications/RFSwarm Manager.app' to update .app icon
+		cmd = "touch '{0}'".format(apppath)
+		self.debugmsg(6, "cmd:", cmd)
+		response = os.popen(cmd).read()
+		self.debugmsg(6, "response:", response)
+
+		# # Try re-registering your application with Launch Services:
+		# # /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/MyTool.app
+		# lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+		# cmd = "{0} -f '{1}'".format(lsregister, apppath)
+		# self.debugmsg(6, "cmd:", cmd)
+		# response = os.popen(cmd).read()
+		# self.debugmsg(6, "response:", response)
 
 	def findiniloctaion(self):
 
@@ -236,7 +479,6 @@ class RFSwarmAgent():
 
 		self.debugmsg(6, "inilocations: ", inilocations)
 
-
 		for iniloc in inilocations:
 			self.debugmsg(7, "iniloc: ", iniloc)
 			if os.path.isfile(iniloc):
@@ -259,11 +501,10 @@ class RFSwarmAgent():
 					if os.access(loc, os.X_OK | os.W_OK):
 						self.debugmsg(7, "iniloc can be created!")
 						return iniloc
-				except:
+				except Exception:
 					pass
 		# This should cause saveini to fail?
 		return None
-
 
 	def debugmsg(self, lvl, *msg):
 		msglst = []
@@ -277,9 +518,9 @@ class RFSwarmAgent():
 					the_method = stack[1][0].f_code.co_name
 					the_line = stack[1][0].f_lineno
 					prefix = "{}: {}({}): [{}:{}]	".format(str(the_class), the_method, the_line, self.debuglvl, lvl)
-					if len(prefix.strip())<32:
+					if len(prefix.strip()) < 32:
 						prefix = "{}	".format(prefix)
-					if len(prefix.strip())<24:
+					if len(prefix.strip()) < 24:
 						prefix = "{}	".format(prefix)
 
 					msglst.append(str(prefix))
@@ -287,24 +528,25 @@ class RFSwarmAgent():
 				for itm in msg:
 					msglst.append(str(itm))
 				print(" ".join(msglst))
-			except:
+			except Exception:
 				pass
 
 	def str2bool(self, instr):
-		return str(instr).lower()  in ("yes", "true", "t", "1")
+		return str(instr).lower() in ("yes", "true", "t", "1")
 
 	def mainloop(self):
 		self.debugmsg(6, "mainloop")
 		prev_status = self.status
 		while self.runagent:
-			self.debugmsg(2, self.status, datetime.now().isoformat(sep=' ',timespec='seconds'),
-				"(",int(time.time()),")",
+			self.debugmsg(
+				2, self.status, datetime.now().isoformat(sep=' ', timespec='seconds'),
+				"(", int(time.time()), ")",
 				"isconnected:", self.isconnected,
 				"isrunning:", self.isrunning,
 				"isstopping:", self.isstopping,
 				"robotcount:", self.robotcount,
 				"\n"
-				)
+			)
 
 			if not self.isconnected:
 				# self.isrunning = False # Not sure if I need this?
@@ -319,8 +561,9 @@ class RFSwarmAgent():
 				self.corethreads["status"] = threading.Thread(target=self.updatestatus)
 				self.corethreads["status"].start()
 
-				self.corethreads["getjobs"] = threading.Thread(target=self.getjobs)
-				self.corethreads["getjobs"].start()
+				if self.listenerfile is not None or self.xmlmode:
+					self.corethreads["getjobs"] = threading.Thread(target=self.getjobs)
+					self.corethreads["getjobs"].start()
 
 				if self.isrunning:
 					self.mainloopinterval = 2
@@ -332,7 +575,7 @@ class RFSwarmAgent():
 					self.corethreads["runjobs"].start()
 				else:
 					self.mainloopinterval = 10
-					if len(self.upload_queue)>0:
+					if len(self.upload_queue) > 0:
 						self.status = "Uploading ({})".format(len(self.upload_queue))
 						self.debugmsg(5, "self.status:", self.status, "len(self.upload_queue):", len(self.upload_queue))
 						self.corethreads["uploadqueue"] = threading.Thread(target=self.process_file_upload_queue)
@@ -342,7 +585,8 @@ class RFSwarmAgent():
 						self.corethreads["getscripts"] = threading.Thread(target=self.getscripts)
 						self.corethreads["getscripts"].start()
 
-
+						if len(self.download_queue):
+							self.status = "Downloading ({})".format(len(self.download_queue))
 
 			if (prev_status == "Stopping" or "Uploading" in prev_status) and self.status == "Ready":
 				# neet to reset something
@@ -353,13 +597,13 @@ class RFSwarmAgent():
 			time.sleep(self.mainloopinterval)
 
 	def updateipaddresslist(self):
-		if len(self.ipaddresslist)<1:
+		if len(self.ipaddresslist) < 1:
 			self.ipaddresslist = []
 			iflst = psutil.net_if_addrs()
 			for nic in iflst.keys():
 				self.debugmsg(6, "nic", nic)
 				for addr in iflst[nic]:
-					 # '127.0.0.1', '::1', 'fe80::1%lo0'
+					# '127.0.0.1', '::1', 'fe80::1%lo0'
 					self.debugmsg(6, "addr", addr.address)
 					if addr.address not in ['127.0.0.1', '::1', 'fe80::1%lo0']:
 						self.ipaddresslist.append(addr.address)
@@ -372,9 +616,9 @@ class RFSwarmAgent():
 		niccounters1 = psutil.net_io_counters(pernic=True)
 		nicstats = psutil.net_if_stats()
 		for nic in nicstats.keys():
-			if nicstats[nic].speed>0:
+			if nicstats[nic].speed > 0:
 				self.debugmsg(6, "Speed:", nicstats[nic].speed)
-				bytes_speed = nicstats[nic].speed * 1024 * 1024
+				bytes_speed = nicstats[nic].speed * 1024 * 1024 / 8
 				bytes_sent_sec = niccounters1[nic].bytes_sent - niccounters0[nic].bytes_sent
 				bytes_recv_sec = niccounters1[nic].bytes_recv - niccounters0[nic].bytes_recv
 				self.debugmsg(6, "bytes_speed:	", bytes_speed)
@@ -383,17 +627,16 @@ class RFSwarmAgent():
 				bytes_max_sec = max([bytes_sent_sec, bytes_recv_sec])
 				self.debugmsg(6, "bytes_max_sec:	", bytes_max_sec)
 				if bytes_max_sec > 0:
-					netpctlist.append((bytes_max_sec/bytes_speed)*100)
+					netpctlist.append((bytes_max_sec / bytes_speed) * 100)
 				else:
 					netpctlist.append(0)
 
-		if len(netpctlist)>0:
+		if len(netpctlist) > 0:
 			self.debugmsg(6, "netpctlist:	", netpctlist)
 			self.netpct = max(netpctlist)
 			self.debugmsg(6, "self.netpct:	", self.netpct)
 		else:
 			self.netpct = 0
-
 
 	def updatestatus(self):
 		self.debugmsg(6, "self.swarmmanager:", self.swarmmanager)
@@ -415,19 +658,20 @@ class RFSwarmAgent():
 			"NET%": self.netpct,
 			"Robots": self.robotcount,
 			"Status": self.status,
-			"Properties": self.agentproperties
+			"Properties": self.agentproperties,
+			"FileCount": len(list(self.scriptlist.keys()))
 		}
 		try:
 			r = requests.post(uri, json=payload, timeout=self.timeout)
 			self.debugmsg(8, r.status_code, r.text)
-			if (r.status_code != requests.codes.ok):
+			if r.status_code != requests.codes.ok:
 				self.debugmsg(5, "r.status_code:", r.status_code, requests.codes.ok, r.text)
-				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 				self.isconnected = False
 				self.debugmsg(7, "self.isconnected", self.isconnected)
 		except Exception as e:
 			self.debugmsg(8, "Exception:", e)
-			self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+			self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 			self.isconnected = False
 			self.debugmsg(5, "self.isconnected", self.isconnected)
 
@@ -448,11 +692,11 @@ class RFSwarmAgent():
 			try:
 				r = requests.get(self.swarmmanager, timeout=self.timeout)
 				self.debugmsg(8, r.status_code, r.text)
-				if (r.status_code == requests.codes.ok):
+				if r.status_code == requests.codes.ok:
 					self.debugmsg(7, "r.status_code:", r.status_code, requests.codes.ok, r.text)
 					self.isconnected = True
-					self.debugmsg(0, "Manager Connected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
-			except:
+					self.debugmsg(0, "Manager Connected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
+			except Exception:
 				pass
 
 	def findmanager(self):
@@ -481,31 +725,38 @@ class RFSwarmAgent():
 			self.saveini()
 
 	def findlibraries(self):
+		# post python 3.8 method
+		# This method works for python 3.8 and higher
 		found = 0
 		liblst = []
-		# import pkg_resources
-		installed_packages = pkg_resources.working_set
-		# self.debugmsg(5, "installed_packages:", installed_packages)
+
+		installed_packages = importlib.metadata.distributions()
 		for i in installed_packages:
-			# self.debugmsg(5, "i:", i)
-			# self.debugmsg(5, "type(i):", type(i))
-
-			# self.debugmsg(5, "i.key:", i.key)
-			# self.debugmsg(5, "i.value:", installed_packages[i])
-			# self.debugmsg(5, "i value:", str(i).split(" ")[1])
-
-
-			if i.key.strip() == "robotframework":
+			# if "robot" in i.metadata["Name"]:
+			# print(dist.metadata["Name"], dist.version)
+			if i.metadata["Name"].strip() == "robotframework":
 				found = 1
-			if i.key.startswith("robotframework-"):
+				if "RobotFramework" in self.agentproperties:
+					ver = self.higher_version(i.version, self.agentproperties["RobotFramework"])
+					self.agentproperties["RobotFramework"] = ver
+					self.debugmsg(6, i.metadata["Name"].strip(), i.version, "-->", ver)
+				else:
+					self.agentproperties["RobotFramework"] = i.version
+					self.debugmsg(6, i.metadata["Name"].strip(), i.version)
+			if i.metadata["Name"].startswith("robotframework-"):
 				# print(i.key)
-				keyarr = i.key.strip().split("-")
+				keyarr = i.metadata["Name"].strip().split("-")
+				self.debugmsg(7, keyarr, i.version)
 				#  next overwrites previous
-				self.agentproperties["RobotFramework: Library: "+keyarr[1]] = str(i).split(" ")[1]
+				if "RobotFramework: Library: " + keyarr[1] in self.agentproperties:
+					ver = self.higher_version(i.version, self.agentproperties["RobotFramework: Library: " + keyarr[1]])
+					self.agentproperties["RobotFramework: Library: " + keyarr[1]] = ver
+				else:
+					self.agentproperties["RobotFramework: Library: " + keyarr[1]] = i.version
 				liblst.append(keyarr[1])
 
 		self.debugmsg(8, "liblst:", liblst, len(liblst))
-		if len(liblst)>0:
+		if len(liblst) > 0:
 			self.debugmsg(7, "liblst:", ", ".join(liblst))
 			self.agentproperties["RobotFramework: Libraries"] = ", ".join(liblst)
 
@@ -515,38 +766,26 @@ class RFSwarmAgent():
 			self.debugmsg(0, "Perhaps try: 'pip install robotframework'")
 			raise Exception("RobotFramework is not installed")
 
-
-	def tick_counter(self):
-		#
-		# This function is simply a way to roughly measure the number of agents being used
-		# without collecting any other data from the user or thier machine.
-		#
-		# A simple get request on this file on startup or once a day should make it appear
-		# in the github insights if people are actually using this application.
-		#
-		# t = threading.Thread(target=self.tick_counter)
-		# t.start()
-		# only tick once per day
-		# 1 day, 24 hours  = 60 * 60 * 24
-		aday = 60 * 60 * 24
-		while True:
-
-			ver = self.version
-			if ver[0] != 'v':
-				ver = "v" + ver
-
-			# https://github.com/damies13/rfswarm/blob/v0.6.2/Doc/Images/z_agent.txt
-			url = "https://github.com/damies13/rfswarm/blob/"+ver+"/Doc/Images/z_agent.txt"
-			try:
-				r = requests.get(url, timeout=self.timeout)
-				self.debugmsg(9, "tick_counter:", r.status_code)
-			except:
-				pass
-			time.sleep(aday)
-
+	def higher_version(self, versiona, versionb):
+		lversiona = [int(v) for v in versiona.split(".")]
+		lversionb = [int(v) for v in versionb.split(".")]
+		for i in range(max(len(lversiona), len(lversionb))):
+			v1 = lversiona[i] if i < len(lversiona) else 0
+			v2 = lversionb[i] if i < len(lversionb) else 0
+			if v1 > v2:
+				return versiona
+			elif v1 < v2:
+				return versionb
+		return versiona
 
 	def getscripts(self):
 		self.debugmsg(6, "getscripts")
+
+		if len(list(self.download_threads.keys())) > 0:
+			# already processing the queue, don't double up
+			self.debugmsg(5, "already processing the queue, don't double up")
+			return None
+
 		uri = self.swarmmanager + "Scripts"
 		payload = {
 			"AgentName": self.agentname
@@ -555,14 +794,14 @@ class RFSwarmAgent():
 		try:
 			r = requests.post(uri, json=payload, timeout=self.timeout)
 			self.debugmsg(6, "resp: ", r.status_code, r.text)
-			if (r.status_code != requests.codes.ok):
+			if r.status_code != requests.codes.ok:
 				self.debugmsg(5, "r.status_code:", r.status_code, requests.codes.ok)
-				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 				self.isconnected = False
 
 		except Exception as e:
 			self.debugmsg(5, "Exception:", e)
-			self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+			self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 			self.isconnected = False
 
 		if not self.isconnected:
@@ -582,20 +821,65 @@ class RFSwarmAgent():
 			if hash not in self.scriptlist:
 				self.debugmsg(6, "getfile")
 				self.scriptlist[hash] = {'id': hash}
-				t = threading.Thread(target=self.getfile, args=(hash,))
-				t.start()
+				if hash not in self.download_queue:
+					self.download_queue.append(hash)
 			else:
-				# self.scriptlist[hash]['localfile']
 				self.debugmsg(6, "Check file")
 				if 'localfile' in self.scriptlist[hash]:
 					if not os.path.isfile(self.scriptlist[hash]['localfile']):
-						t = threading.Thread(target=self.getfile, args=(hash,))
-						t.start()
+						if hash not in self.download_queue:
+							self.download_queue.append(hash)
 				else:
 					self.debugmsg(6, "getfile")
 					self.scriptlist[hash] = {'id': hash}
-					t = threading.Thread(target=self.getfile, args=(hash,))
-					t.start()
+					if hash not in self.download_queue:
+						self.download_queue.append(hash)
+
+		if len(self.download_queue):
+			self.process_file_download_queue()
+
+	def process_file_download_queue(self):
+
+		if len(list(self.download_threads.keys())) > 0:
+			# already processing the queue, don't double up
+			self.debugmsg(5, "already processing the queue, don't double up")
+			return None
+
+		corecount = psutil.cpu_count()
+		threadcount = corecount * 32
+		self.debugmsg(7, "download_queue", self.download_queue)
+		self.debugmsg(5, "corecount", corecount, "	threadcount:", threadcount)
+		# for hash in self.download_queue:
+		while len(self.download_queue) > 0:
+			# limit the number of upload threads so we don't max out the agent and cause it
+			# to go into critical/offline? mode
+
+			hash = self.download_queue.pop(0)
+
+			self.debugmsg(5, "download_threads count:", len(list(self.download_threads.keys())))
+			while len(list(self.download_threads.keys())) > threadcount - 1:
+				self.debugmsg(5, "download_threads count:", len(list(self.download_threads.keys())))
+				# key = list(self.upload_threads.keys())[0]
+				key = random.choice(list(self.download_threads.keys()))
+				self.debugmsg(5, "key:", key)
+				if key in self.download_threads and self.download_threads[key].is_alive():
+					self.download_threads[key].join()
+				if key in self.download_threads:
+					del self.download_threads[key]
+			key = str(uuid.uuid4())
+			self.debugmsg(5, "key:", key)
+			while hash in self.download_queue:
+				self.download_queue.remove(hash)
+			self.download_threads[key] = threading.Thread(target=self.getfile, args=(hash,))
+			self.download_threads[key].start()
+			time.sleep(0.02)
+		for key in list(self.download_threads.keys()):
+			self.debugmsg(5, "key:", key)
+			if key in self.download_threads and self.download_threads[key].is_alive():
+				self.download_threads[key].join()
+			if key in self.download_threads:
+				del self.download_threads[key]
+		gc.collect()
 
 	def getfile(self, hash):
 		self.debugmsg(6, "hash: ", hash)
@@ -607,15 +891,16 @@ class RFSwarmAgent():
 		}
 		try:
 			r = requests.post(uri, json=payload, timeout=self.timeout)
-			self.debugmsg(6, "resp: ", r.status_code, r.text)
-			if (r.status_code != requests.codes.ok):
+			self.debugmsg(8, "resp: ", r.status_code, r.text)
+			if r.status_code != requests.codes.ok:
 				self.debugmsg(5, "r.status_code:", r.status_code, requests.codes.ok)
-				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+				self.debugmsg(5, "resp: ", r.status_code, r.text)
+				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 				self.isconnected = False
 
 		except Exception as e:
-			self.debugmsg(8, "Exception:", e)
-			self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+			self.debugmsg(5, "Exception:", e)
+			self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 			self.isconnected = False
 
 		if not self.isconnected:
@@ -632,7 +917,7 @@ class RFSwarmAgent():
 		try:
 			self.debugmsg(7, 'scriptdir', self.scriptdir)
 			localfile = os.path.abspath(os.path.join(self.scriptdir, jsonresp['File']))
-			self.debugmsg(1, 'localfile', localfile)
+			self.debugmsg(5, 'localfile', localfile)
 
 		except Exception as e:
 			self.debugmsg(0, "Exception:", e)
@@ -664,6 +949,7 @@ class RFSwarmAgent():
 				self.debugmsg(6, "afile:")
 				afile.write(uncompressed)
 				self.debugmsg(6, "write:")
+			self.debugmsg(1, 'Downloaded:', localfile)
 
 		except Exception as e:
 			self.debugmsg(1, "Exception:", e)
@@ -678,14 +964,14 @@ class RFSwarmAgent():
 		try:
 			r = requests.post(uri, json=payload, timeout=self.timeout)
 			self.debugmsg(7, "getjobs: resp: ", r.status_code, r.text)
-			if (r.status_code != requests.codes.ok):
+			if r.status_code != requests.codes.ok:
 				self.debugmsg(7, "r.status_code:", r.status_code, requests.codes.ok)
-				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 				self.isconnected = False
 
 		except Exception as e:
 			self.debugmsg(8, "Exception:", e)
-			self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+			self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 			self.isconnected = False
 
 		if not self.isconnected:
@@ -698,8 +984,29 @@ class RFSwarmAgent():
 			jsonresp = json.loads(r.text)
 			self.debugmsg(7, "getjobs: jsonresp:", jsonresp)
 
+			# RFSwarmAgent: getjobs(821): [7:7]	 getjobs: r.text: {"AgentName": "hp-elite-desk-800-g3", "StartTime": 0, "EndTime": 0, "RunName": "", "Abort": false, "UploadMode": "err", "EnvironmentVariables": {"RF_DIRECTORY": {"vartype": "path", "value": "rf_dir"}, "RF_MAGICNUM": {"vartype": "value", "value": "TWELVE"}}, "Schedule": {}}
+			# "EnvironmentVariables": {"RF_DIRECTORY": {"vartype": "path", "value": "rf_dir"}, "RF_MAGICNUM": {"vartype": "value", "value": "TWELVE"}},
+			if "EnvironmentVariables" in jsonresp:
+				for envvar in list(jsonresp["EnvironmentVariables"].keys()):
+					self.debugmsg(7, "envvar:", envvar, ":", jsonresp["EnvironmentVariables"][envvar])
+					localval = ""
+					if "vartype" in jsonresp["EnvironmentVariables"][envvar] and jsonresp["EnvironmentVariables"][envvar]["vartype"] == "path":
+						localval = os.path.abspath(os.path.join(self.scriptdir, jsonresp["EnvironmentVariables"][envvar]["value"]))
+						self.debugmsg(5, 'localval:', localval)
+					else:
+						if "value" in jsonresp["EnvironmentVariables"][envvar]:
+							localval = jsonresp["EnvironmentVariables"][envvar]["value"]
+					if envvar in list(os.environ.keys()):
+						# envvalue = os.environ[envvar]
+						if envvar in self.managedenvvars and os.environ[envvar] != localval:
+							os.environ[envvar] = localval
+							self.debugmsg(1, "Setting Environment Variable:", envvar, "=", localval)
+					else:
+						self.managedenvvars.append(envvar)
+						os.environ[envvar] = localval
+						self.debugmsg(1, "Setting Environment Variable:", envvar, "=", localval)
 
-			if jsonresp["StartTime"] < int(time.time()) < (jsonresp["EndTime"]+300):
+			if jsonresp["StartTime"] < int(time.time()) < (jsonresp["EndTime"] + 300):
 				self.isrunning = True
 				self.run_name = jsonresp["RunName"]
 				for s in jsonresp["Schedule"].keys():
@@ -707,7 +1014,7 @@ class RFSwarmAgent():
 					if s not in self.jobs.keys():
 						self.jobs[s] = {}
 					for k in jsonresp["Schedule"][s].keys():
-						self.debugmsg(6, "getjobs: self.jobs[",s,"][",k,"]", jsonresp["Schedule"][s][k])
+						self.debugmsg(6, "getjobs: self.jobs[", s, "][", k, "]", jsonresp["Schedule"][s][k])
 						self.jobs[s][k] = jsonresp["Schedule"][s][k]
 					if "UploadMode" in jsonresp:
 						self.jobs[s]["UploadMode"] = jsonresp["UploadMode"]
@@ -731,11 +1038,8 @@ class RFSwarmAgent():
 				self.debugmsg(5, "!!! Abort !!!")
 				self.abortjobs()
 
-
 			self.debugmsg(5, "getjobs: isrunning:", self.isrunning, "	isstopping:", self.isstopping)
 			self.debugmsg(7, "getjobs: self.jobs:", self.jobs)
-
-
 
 		except Exception as e:
 			self.debugmsg(1, "getjobs: Exception:", e)
@@ -752,7 +1056,6 @@ class RFSwarmAgent():
 
 			except Exception as e:
 				self.debugmsg(1, "getjobs: Exception:", e)
-
 
 	def runjobs(self):
 		self.debugmsg(6, "runjobs: self.jobs:", self.jobs)
@@ -789,11 +1092,11 @@ class RFSwarmAgent():
 							self.debugmsg(5, "Thread not started for jobid:", jobid)
 				time.sleep(0.1)
 
-
 	def runthread(self, jobid):
 		now = int(time.time())
 
 		self.ensure_listner_file()
+		self.ensure_repeater_listner_file()
 
 		if "ScriptIndex" not in self.jobs[jobid]:
 			self.debugmsg(6, "runthread: jobid:", jobid)
@@ -806,10 +1109,34 @@ class RFSwarmAgent():
 
 		self.jobs[jobid]["Iteration"] += 1
 
+		self.debugmsg(5, "self.jobs[jobid]:", self.jobs[jobid])
+
+		# jobfile = os.path.join(self.scriptdir, "job_{}.json".format(jobid))
+		jobfile = os.path.join(self.scriptdir, "RFS_Job_{}_{}.json".format(self.jobs[jobid]["ScriptIndex"], self.jobs[jobid]["Robot"]))
+
+		jobdata = {}
+		jobdata["StartTime"] = self.jobs[jobid]["StartTime"]
+		jobdata["EndTime"] = self.jobs[jobid]["EndTime"]
+		jobdata["Iteration"] = self.jobs[jobid]["Iteration"]
+		jobdata["Index"] = self.jobs[jobid]["ScriptIndex"]
+		jobdata["Robot"] = self.jobs[jobid]["Robot"]
+		jobdata["jobid"] = jobid
+		jobdata["Test"] = self.jobs[jobid]["Test"]
+
+		with open(jobfile, 'w', encoding="utf-8") as jfile:
+			jfile.write(json.dumps(jobdata))
+
 		hash = self.jobs[jobid]['ScriptHash']
 		self.debugmsg(6, "runthread: hash:", hash)
 		test = self.jobs[jobid]['Test']
 		self.debugmsg(6, "runthread: test:", test)
+		if platform.system() != 'Windows':
+			test = test.replace(r'${', r'\${')
+			self.debugmsg(6, "runthread: test:", test)
+		test = test.replace(r'"', r'\"')
+
+		if hash not in self.scriptlist:
+			self.getfile(hash)
 
 		if 'localfile' not in self.scriptlist[hash]:
 			if self.corethreads["getscripts"].is_alive():
@@ -830,7 +1157,6 @@ class RFSwarmAgent():
 		farr = os.path.splitext(file)
 		self.debugmsg(6, "runthread: farr:", farr)
 
-
 		excludelibraries = ",".join(self.excludelibraries)
 		if "excludelibraries" in self.jobs[jobid]:
 			# not sure if we need to do this???
@@ -838,6 +1164,12 @@ class RFSwarmAgent():
 			# ellst = self.jobs[jobid]['excludelibraries'].split(",")
 			# excludelibraries = ",".join(ellst)
 			excludelibraries = self.jobs[jobid]['excludelibraries']
+
+		self.debugmsg(6, "excludelibraries:", excludelibraries)
+		excludelibrarielst = excludelibraries.split(",")
+		excludelibrarielst = map(str.strip, excludelibrarielst)
+		excludelibraries = ",".join(excludelibrarielst)
+		self.debugmsg(6, "excludelibraries:", excludelibraries)
 
 		# self.run_name
 		# scriptdir = None
@@ -847,7 +1179,7 @@ class RFSwarmAgent():
 		try:
 			if not os.path.exists(rundir):
 				os.makedirs(rundir)
-		except:
+		except Exception:
 			pass
 
 		threaddirname = self.make_safe_filename("{}_{}_{}_{}".format(farr[0], jobid, self.jobs[jobid]["Iteration"], now))
@@ -856,7 +1188,7 @@ class RFSwarmAgent():
 		try:
 			if not os.path.exists(odir):
 				os.makedirs(odir)
-		except:
+		except Exception:
 			pass
 
 		oprefix = self.make_safe_filename(test)
@@ -866,7 +1198,6 @@ class RFSwarmAgent():
 		outputFileName = "{}_output.xml".format(oprefix)
 		outputFile = os.path.join(odir, outputFileName)
 		self.debugmsg(6, "runthread: outputFile:", outputFile)
-
 
 		if 'Agent' not in self.config:
 			self.config['Agent'] = {}
@@ -883,9 +1214,9 @@ class RFSwarmAgent():
 
 		cmd = [robotcmd]
 		cmd.append("-t")
-		cmd.append('"'+test+'"')
+		cmd.append('"' + test + '"')
 		cmd.append("-d")
-		cmd.append('"'+odir+'"')
+		cmd.append('"' + odir + '"')
 
 		metavars = []
 		metavars.append("RFS_AGENTNAME:{}".format(self.agentname))
@@ -897,21 +1228,74 @@ class RFSwarmAgent():
 		metavars.append("RFS_SWARMMANAGER:{}".format(self.swarmmanager))
 		metavars.append("RFS_EXCLUDELIBRARIES:{}".format(excludelibraries))
 
+		if "injectsleepenabled" in self.jobs[jobid]:
+			metavars.append("RFS_INJECTSLEEP:{}".format(self.jobs[jobid]["injectsleepenabled"]))
+			if self.str2bool(self.jobs[jobid]["injectsleepenabled"]):
+				# injectsleepminimum
+				if "injectsleepminimum" in self.jobs[jobid]:
+					metavars.append("RFS_SLEEPMINIMUM:{}".format(self.jobs[jobid]["injectsleepminimum"]))
+				# injectsleepmaximum
+				if "injectsleepmaximum" in self.jobs[jobid]:
+					metavars.append("RFS_SLEEPMAXIMUM:{}".format(self.jobs[jobid]["injectsleepmaximum"]))
+
+		if "resultnamemode" in self.jobs[jobid]:
+			metavars.append("RFS_RESULTNAMEMODE:{}".format(self.jobs[jobid]["resultnamemode"]))
+
 		for metavar in metavars:
 			cmd.append("-M {}".format(metavar))
 			cmd.append("-v {}".format(metavar))
 
+		if self.xmlmode:
+			# for now this is going to be the easiest way to deal with this for RF7+
+			# Unlikely many people will use xmlmode with RF7 anyway, it's not the default
+			# and was only left in for compatability with early beta's and alphas of RFSwarm
+			# so I expect everyone has already moved on to the listener mode by now, only putting
+			# this in just in case someone is still using xmlmode.
+			rfver = self.agentproperties["RobotFramework"]
+			if int(rfver[0]) >= 7:
+				self.debugmsg(7, "Use legacyoutput mode for RF7+")
+				cmd.append("--legacyoutput")
 
 		if not self.xmlmode:
-			cmd.append("--listener {}".format('"'+self.listenerfile+'"'))
+			cmd.append("--listener {}".format('"' + self.listenerfile + '"'))
+
+		self.debugmsg(9, "runthread: cmd:", cmd)
+
+		self.debugmsg(9, "Check for runthread: robotexe")
+		if "testrepeater" in self.jobs[jobid]:
+			self.debugmsg(7, "runthread: self.jobs[jobid][testrepeater]:", self.jobs[jobid]["testrepeater"])
+			self.debugmsg(9, "runthread: self.jobs[jobid][testrepeater]:", self.str2bool(self.jobs[jobid]["testrepeater"]), type(self.str2bool(self.jobs[jobid]["testrepeater"])))
+			if self.str2bool(self.jobs[jobid]["testrepeater"]):
+				cmd.append("--listener {}".format('"' + self.repeaterfile + '"'))
+
+		self.debugmsg(9, "runthread: cmd:", cmd)
 
 		if "robotoptions" in self.jobs[jobid]:
 			cmd.append("{}".format(self.jobs[jobid]['robotoptions']))
 
-		cmd.append("-o")
-		cmd.append('"'+outputFile+'"')
+		self.debugmsg(9, "runthread: cmd:", cmd)
 
-		cmd.append('"'+localfile+'"')
+		# disableloglog': 'True',
+		if "disableloglog" in self.jobs[jobid]:
+			if self.str2bool(self.jobs[jobid]["disableloglog"]):
+				cmd.append("-l NONE")
+		# 'disablelogreport': 'True',
+		if "disablelogreport" in self.jobs[jobid]:
+			if self.str2bool(self.jobs[jobid]["disablelogreport"]):
+				cmd.append("-r NONE")
+		# 'disablelogoutput': 'True',
+		disablelogoutput = False
+		if "disablelogoutput" in self.jobs[jobid]:
+			disablelogoutput = self.str2bool(self.jobs[jobid]["disablelogoutput"])
+		if self.xmlmode:
+			disablelogoutput = False
+		if disablelogoutput:
+			cmd.append("-o NONE")
+		else:
+			cmd.append("-o")
+			cmd.append('"' + outputFile + '"')
+
+		cmd.append('"' + localfile + '"')
 
 		robotexe = shutil.which(robotcmd)
 		self.debugmsg(6, "runthread: robotexe:", robotexe)
@@ -920,8 +1304,9 @@ class RFSwarmAgent():
 
 			result = 0
 			try:
+				os.chdir(self.scriptdir)
 				# https://stackoverflow.com/questions/4856583/how-do-i-pipe-a-subprocess-call-to-a-text-file
-				with open(logFileName, "w") as f:
+				with open(logFileName, "w", encoding="utf-8") as f:
 					self.debugmsg(3, "Robot run with command: '", " ".join(cmd), "'")
 					# result = subprocess.call(" ".join(cmd), shell=True, stdout=f, stderr=f)
 					try:
@@ -935,9 +1320,12 @@ class RFSwarmAgent():
 						if result != 0:
 							self.debugmsg(1, "Robot returned an error (", result, ") please check the log file:", logFileName)
 					except Exception as e:
-							self.debugmsg(1, "Robot returned an error:", e, " \nplease check the log file:", logFileName)
-							result = 1
+						self.debugmsg(1, "Robot returned an error:", e, " \nplease check the log file:", logFileName)
+						result = 1
 					f.close()
+
+				if os.path.exists(jobfile):
+					os.remove(jobfile)
 
 				if self.xmlmode:
 					if os.path.exists(outputFile):
@@ -951,10 +1339,9 @@ class RFSwarmAgent():
 				self.debugmsg(5, "Robot returned an error:", e)
 				result = 1
 
-
 			uploadmode = self.uploadmode
 			self.debugmsg(5, "uploadmode:", uploadmode)
-			self.debugmsg(5, "self.jobs[",jobid,"]:", self.jobs[jobid])
+			self.debugmsg(5, "self.jobs[", jobid, "]:", self.jobs[jobid])
 			if "UploadMode" in self.jobs[jobid]:
 				uploadmode = self.jobs[jobid]["UploadMode"]
 				self.debugmsg(5, "uploadmode:", uploadmode)
@@ -965,7 +1352,6 @@ class RFSwarmAgent():
 			self.robotcount += -1
 		else:
 			self.debugmsg(1, "Could not find robot executeable:", robotexe)
-
 
 	def queue_file_upload(self, mode, retcode, filedir):
 		reldir = os.path.basename(filedir)
@@ -987,7 +1373,6 @@ class RFSwarmAgent():
 		self.debugmsg(5, "mode:", mode, "	retcode:", retcode)
 		# 	uploadmodes = {'imm':"Immediately", 'err':"On Error Only", 'def':"All Defered"}
 
-
 		for file in filelst:
 			fobj = {}
 			fobj["LocalFilePath"] = file
@@ -1000,8 +1385,6 @@ class RFSwarmAgent():
 			if mode == "imm":
 				# upload now
 				self.file_upload(fobj)
-
-
 
 	def file_upload_list(self, filedir):
 		retlst = []
@@ -1017,8 +1400,6 @@ class RFSwarmAgent():
 					retlst.append(file)
 		return retlst
 
-
-
 	def file_upload(self, fileobj):
 		self.debugmsg(7, "fileobj", fileobj)
 
@@ -1026,7 +1407,6 @@ class RFSwarmAgent():
 
 		hash = self.hash_file(fileobj['LocalFilePath'], fileobj['RelFilePath'])
 		self.debugmsg(7, "hash", hash)
-
 
 		# 	check file exists on manager?
 
@@ -1040,14 +1420,14 @@ class RFSwarmAgent():
 		try:
 			r = requests.post(uri, json=payload, timeout=self.timeout)
 			self.debugmsg(7, "resp: ", r.status_code, r.text)
-			if (r.status_code != requests.codes.ok):
+			if r.status_code != requests.codes.ok:
 				self.debugmsg(5, "r.status_code:", r.status_code, requests.codes.ok)
-				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 				self.isconnected = False
 
 		except Exception as e:
 			self.debugmsg(8, "Exception:", e)
-			self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+			self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 			self.isconnected = False
 
 		if not self.isconnected:
@@ -1076,7 +1456,7 @@ class RFSwarmAgent():
 			localpath = fileobj['LocalFilePath']
 			buf = "\n"
 			with open(localpath, 'rb') as afile:
-			    buf = afile.read()
+				buf = afile.read()
 			self.debugmsg(9, "buf:", buf)
 			compressed = lzma.compress(buf)
 			self.debugmsg(9, "compressed:", compressed)
@@ -1090,14 +1470,14 @@ class RFSwarmAgent():
 			try:
 				r = requests.post(uri, json=payload, timeout=self.timeout)
 				self.debugmsg(7, "resp: ", r.status_code, r.text)
-				if (r.status_code != requests.codes.ok):
+				if r.status_code != requests.codes.ok:
 					self.debugmsg(5, "r.status_code:", r.status_code, requests.codes.ok)
-					self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+					self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 					self.isconnected = False
 
 			except Exception as e:
 				self.debugmsg(8, "Exception:", e)
-				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+				self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 				self.isconnected = False
 
 			if not self.isconnected:
@@ -1112,12 +1492,9 @@ class RFSwarmAgent():
 				self.debugmsg(1, "Exception:", e)
 				return None
 
-
-
 		# once sucessful remove from queue
 		if fileobj in self.upload_queue:
 			self.upload_queue.remove(fileobj)
-
 
 	def hash_file(self, file, relpath):
 		BLOCKSIZE = 65536
@@ -1132,17 +1509,37 @@ class RFSwarmAgent():
 		self.debugmsg(3, "file:", file, "	hash:", hasher.hexdigest())
 		return hasher.hexdigest()
 
-
 	def process_file_upload_queue(self):
+		corecount = psutil.cpu_count()
+		threadcount = corecount * 3
 		self.debugmsg(7, "upload_queue", self.upload_queue)
+		self.debugmsg(5, "corecount", corecount, "	threadcount:", threadcount)
 		# self.process_file_upload_queue
 		for fobj in self.upload_queue:
-			# probably need to make this multi-treaded
-			# self.file_upload(fobj)
-			t = threading.Thread(target=self.file_upload, args=(fobj,))
-			t.start()
+			# limit the number of upload threads so we don't max out the agent and cause it
+			# to go into critical/offline? mode
+			self.debugmsg(5, "upload_threads count:", len(list(self.upload_threads.keys())))
+			while len(list(self.upload_threads.keys())) > threadcount - 1:
+				self.debugmsg(5, "upload_threads count:", len(list(self.upload_threads.keys())))
+				# key = list(self.upload_threads.keys())[0]
+				key = random.choice(list(self.upload_threads.keys()))
+				self.debugmsg(5, "key:", key)
+				if key in self.upload_threads and self.upload_threads[key].is_alive():
+					self.upload_threads[key].join()
+				if key in self.upload_threads:
+					del self.upload_threads[key]
+			key = str(uuid.uuid4())
+			self.debugmsg(5, "key:", key)
+			self.upload_threads[key] = threading.Thread(target=self.file_upload, args=(fobj,))
+			self.upload_threads[key].start()
 			time.sleep(0.5)
-
+		for key in list(self.upload_threads.keys()):
+			self.debugmsg(5, "key:", key)
+			if key in self.upload_threads and self.upload_threads[key].is_alive():
+				self.upload_threads[key].join()
+			if key in self.upload_threads:
+				del self.upload_threads[key]
+		gc.collect()
 
 	def run_process_output(self, outputFile, index, robot, iter):
 		# This should be a better way to do this
@@ -1157,7 +1554,7 @@ class RFSwarmAgent():
 		# .//kw[@library!='BuiltIn' and msg]/status/@endtime
 		try:
 			tree = ET.parse(outputFile)
-		except:
+		except Exception:
 			self.debugmsg(1, "Error parsing XML file:", outputFile)
 		self.debugmsg(6, "tree: '", tree)
 		root = tree.getroot()
@@ -1188,13 +1585,13 @@ class RFSwarmAgent():
 
 				elapsedtime = enddate.timestamp() - startdate.timestamp()
 
-				self.debugmsg(6, "resultname: '", txn,
-						"' result'", status,
-						"' elapsedtime'", elapsedtime,
-						"' starttime'", starttime,
-						"' endtime'", endtime, "'"
-						)
-
+				self.debugmsg(
+					6, "resultname: '", txn,
+					"' result'", status,
+					"' elapsedtime'", elapsedtime,
+					"' starttime'", starttime,
+					"' endtime'", endtime, "'"
+				)
 
 				# Send result to manager
 				uri = self.swarmmanager + "Result"
@@ -1219,17 +1616,81 @@ class RFSwarmAgent():
 				self.debugmsg(6, "run_proces_output: payload", payload)
 				try:
 					r = requests.post(uri, json=payload, timeout=self.timeout)
-					self.debugmsg(6, "run_proces_output: ",r.status_code, r.text)
-					if (r.status_code != requests.codes.ok):
+					self.debugmsg(6, "run_proces_output: ", r.status_code, r.text)
+					if r.status_code != requests.codes.ok:
 						self.debugmsg(5, "r.status_code:", r.status_code, requests.codes.ok)
-						self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+						self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 						self.isconnected = False
 				except Exception as e:
 					self.debugmsg(8, "Exception:", e)
-					self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ',timespec='seconds'), "(",int(time.time()),")")
+					self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
 					self.isconnected = False
 
+		for result in root.findall(".//kw/doc/.."):
+			self.debugmsg(6, "run_process_output: result: ", result)
+			library = result.get('library')
+			# if library not in ["BuiltIn", "String", "OperatingSystem", "perftest"]:
+			if library not in self.excludelibraries:
+				self.debugmsg(6, "run_process_output: library: ", library)
+				seq += 1
+				self.debugmsg(6, "result: library:", library)
+				txn = result.find('doc').text
+				self.debugmsg(6, "result: txn:", txn)
 
+				el_status = result.find('status')
+				status = el_status.get('status')
+				self.debugmsg(6, "result: status:", status)
+				starttime = el_status.get('starttime')
+				self.debugmsg(6, "result: starttime:", starttime)
+				endtime = el_status.get('endtime')
+				self.debugmsg(6, "result: endtime:", endtime)
+
+				# 20191026 09:34:23.044
+				startdate = datetime.strptime(starttime, '%Y%m%d %H:%M:%S.%f')
+				enddate = datetime.strptime(endtime, '%Y%m%d %H:%M:%S.%f')
+
+				elapsedtime = enddate.timestamp() - startdate.timestamp()
+
+				self.debugmsg(
+					6, "resultname: '", txn,
+					"' result'", status,
+					"' elapsedtime'", elapsedtime,
+					"' starttime'", starttime,
+					"' endtime'", endtime, "'"
+				)
+
+				# Send result to manager
+				uri = self.swarmmanager + "Result"
+
+				self.debugmsg(6, "run_proces_output: uri", uri)
+
+				# requiredfields = ["AgentName", "ResultName", "Result", "ElapsedTime", "StartTime", "EndTime"]
+
+				payload = {
+					"AgentName": self.agentname,
+					"ResultName": txn,
+					"Result": status,
+					"ElapsedTime": elapsedtime,
+					"StartTime": startdate.timestamp(),
+					"EndTime": enddate.timestamp(),
+					"ScriptIndex": index,
+					"Robot": robot,
+					"Iteration": iter,
+					"Sequence": seq
+				}
+
+				self.debugmsg(6, "run_proces_output: payload", payload)
+				try:
+					r = requests.post(uri, json=payload, timeout=self.timeout)
+					self.debugmsg(6, "run_proces_output: ", r.status_code, r.text)
+					if r.status_code != requests.codes.ok:
+						self.debugmsg(5, "r.status_code:", r.status_code, requests.codes.ok)
+						self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
+						self.isconnected = False
+				except Exception as e:
+					self.debugmsg(8, "Exception:", e)
+					self.debugmsg(0, "Manager Disconnected", self.swarmmanager, datetime.now().isoformat(sep=' ', timespec='seconds'), "(", int(time.time()), ")")
+					self.isconnected = False
 
 	def make_safe_filename(self, s):
 		def safe_char(c):
@@ -1240,8 +1701,8 @@ class RFSwarmAgent():
 		return "".join(safe_char(c) for c in s).rstrip("_")
 
 	def saveini(self):
-		with open(self.agentini, 'w') as configfile:    # save
-		    self.config.write(configfile)
+		with open(self.agentini, 'w', encoding="utf-8") as configfile:    # save
+			self.config.write(configfile)
 
 	def ensuredir(self, dir):
 		if os.path.exists(dir):
@@ -1270,8 +1731,26 @@ class RFSwarmAgent():
 				if not os.path.isfile(self.listenerfile):
 					self.create_listner_file()
 
+	def ensure_repeater_listner_file(self):
+		if self.repeaterfile is None:
+			self.create_repeater_listner_file()
+
 	def create_listner_file(self):
-		self.listenerfile = os.path.join(self.scriptdir, "RFSListener2.py")
+
+		while "RobotFramework" not in self.agentproperties:
+			time.sleep(0.1)
+		rfver = self.agentproperties["RobotFramework"]
+		self.debugmsg(5, "RobotFramework version:", rfver, " RobotFramework major version:", int(rfver[0]))
+		# lrfver = rfver.split(".")
+		if int(rfver[0]) >= 7:
+			self.create_V3_listner_file()
+		else:
+			self.create_V2_listner_file()
+
+	def create_V3_listner_file(self):
+
+		self.listenerfile = os.path.join(self.scriptdir, "RFSListener3.py")
+		self.debugmsg(5, "listenerfile", self.listenerfile)
 
 		fd = []
 		fd.append("")
@@ -1281,101 +1760,178 @@ class RFSwarmAgent():
 		fd.append("import socket")
 		fd.append("from datetime import datetime")
 		fd.append("import time")
+		fd.append("import random")
 		fd.append("import requests")
 		fd.append("import inspect")
 		fd.append("import threading")
+		fd.append("from robot.libraries.BuiltIn import BuiltIn")
+		fd.append("from robot import result, running")
 		fd.append("")
-		fd.append("class RFSListener2:")
-		fd.append("	ROBOT_LISTENER_API_VERSION = 2")
+		fd.append("class RFSListener3:")
+		fd.append("	ROBOT_LISTENER_API_VERSION = 3")
 		fd.append("")
 		fd.append("	msg = None")
 		fd.append("	swarmmanager = \"http://localhost:8138/\"")
 		fd.append("	excludelibraries = [\"BuiltIn\",\"String\",\"OperatingSystem\",\"perftest\"]")
+		fd.append("	resultnamemode = \"dflt\"")
 		fd.append("	debuglevel = 0")
 		fd.append("	index = 0")
 		fd.append("	robot = 0")
 		fd.append("	iter = 0")
 		fd.append("	seq = 0")
+		fd.append("	injectsleep = False")
+		fd.append("	sleepminimum = 15")
+		fd.append("	sleepmaximum = 45")
 		fd.append("")
-		fd.append("	def start_suite(self, name, attrs):")
-		fd.append("		if 'RFS_DEBUGLEVEL' in attrs['metadata']:")
-		fd.append("			self.debuglevel = int(attrs['metadata']['RFS_DEBUGLEVEL'])")
+		fd.append("	def start_suite(self, suite: running.TestSuite, result: result.TestSuite):")
+		fd.append("		if 'RFS_DEBUGLEVEL' in result.metadata:")
+		fd.append("			self.debuglevel = int(result.metadata['RFS_DEBUGLEVEL'])")
 		fd.append("			self.debugmsg(6, 'debuglevel: ', self.debuglevel)")
-		fd.append("		if 'RFS_INDEX' in attrs['metadata']:")
-		fd.append("			self.index = attrs['metadata']['RFS_INDEX']")
+		fd.append("		if 'RFS_INDEX' in result.metadata:")
+		fd.append("			self.index = result.metadata['RFS_INDEX']")
 		fd.append("			self.debugmsg(6, 'index: ', self.index)")
-		fd.append("		if 'RFS_ITERATION' in attrs['metadata']:")
-		fd.append("			self.iter = attrs['metadata']['RFS_ITERATION']")
+		fd.append("		if 'RFS_ITERATION' in result.metadata:")
+		fd.append("			self.iter = result.metadata['RFS_ITERATION']")
 		fd.append("			self.debugmsg(6, 'iter: ', self.iter)")
-		fd.append("		if 'RFS_ROBOT' in attrs['metadata']:")
-		fd.append("			self.robot = attrs['metadata']['RFS_ROBOT']")
+		fd.append("		if 'RFS_ROBOT' in result.metadata:")
+		fd.append("			self.robot = result.metadata['RFS_ROBOT']")
 		fd.append("			self.debugmsg(6, 'robot: ', self.robot)")
-		fd.append("		if 'RFS_SWARMMANAGER' in attrs['metadata']:")
-		fd.append("			self.swarmmanager = attrs['metadata']['RFS_SWARMMANAGER']")
+		fd.append("		if 'RFS_SWARMMANAGER' in result.metadata:")
+		fd.append("			self.swarmmanager = result.metadata['RFS_SWARMMANAGER']")
 		fd.append("			self.debugmsg(6, 'swarmmanager: ', self.swarmmanager)")
-		fd.append("		if 'RFS_EXCLUDELIBRARIES' in attrs['metadata']:")
-		fd.append("			self.excludelibraries = attrs['metadata']['RFS_EXCLUDELIBRARIES'].split(\",\")")
+		fd.append("		if 'RFS_EXCLUDELIBRARIES' in result.metadata:")
+		fd.append("			self.excludelibraries = result.metadata['RFS_EXCLUDELIBRARIES'].split(\",\")")
 		fd.append("			self.debugmsg(6, 'excludelibraries: ', self.excludelibraries)")
+		fd.append("		if 'RFS_INJECTSLEEP' in result.metadata:")
+		fd.append("			self.injectsleep = result.metadata['RFS_INJECTSLEEP']")
+		fd.append("			self.debugmsg(6, 'injectsleep: ', self.injectsleep)")
+		fd.append("		if 'RFS_SLEEPMINIMUM' in result.metadata:")
+		fd.append("			self.sleepminimum = result.metadata['RFS_SLEEPMINIMUM']")
+		fd.append("			self.debugmsg(6, 'sleepminimum: ', self.sleepminimum)")
+		fd.append("		if 'RFS_SLEEPMAXIMUM' in result.metadata:")
+		fd.append("			self.sleepmaximum = result.metadata['RFS_SLEEPMAXIMUM']")
+		fd.append("			self.debugmsg(6, 'sleepmaximum: ', self.sleepmaximum)")
+		fd.append("		if 'RFS_RESULTNAMEMODE' in result.metadata:")
+		fd.append("			self.resultnamemode = result.metadata['RFS_RESULTNAMEMODE']")
+		fd.append("			self.debugmsg(6, 'resultnamemode: ', self.resultnamemode)")
+		fd.append("		self.seedseed()")
 		fd.append("")
-		fd.append("	def log_message(self, message):")
+		fd.append("	def seedseed(self):")
+		fd.append("		random.seed()")
+		fd.append("		r1 = random.random()%1000")
+		fd.append("		random.seed(r1)")
+		fd.append("		r2 = random.random()%10000")
+		fd.append("		random.seed(r2)")
+		fd.append("")
+		fd.append("	def log_message(self, message: result.Message):")
 		# fd.append("		self.debugmsg(8, 'message[\\'message\\']: ', message['message'])")
 		# fd.append("		self.debugmsg(8, 'message[\\'message\\'][0:2]: ', message['message'][0:2])")
-		fd.append("		if message['message'][0:2] != '${':")
+		fd.append("		if message.message[0:2] != '${':")
 		fd.append("			self.msg = None")
 		fd.append("			self.msg = message")
 		# fd.append("			self.debugmsg(6, 'message: ', message)")
 		# fd.append("			self.debugmsg(6, 'self.msg: ', self.msg)")
 		fd.append("")
-		fd.append("	def end_keyword(self, name, attrs):")
-		fd.append("		self.debugmsg(3, 'Keyword name: ', name)")
+		fd.append("	def end_keyword(self, data: running.Keyword, result: result.Keyword):")
+		fd.append("		self.debugmsg(8, 'data: ', data, data.to_dict())")
+		fd.append("		self.debugmsg(8, 'result: ', result, result.to_dict())")
+		fd.append("		self.debugmsg(3, 'Keyword name: ', data.name)")
+		fd.append("		attrs = result.to_dict()")
 		fd.append("		self.debugmsg(6, 'attrs: ', attrs)")
-		fd.append("		self.debugmsg(5, 'attrs[doc]: ', attrs['doc'])")
 		fd.append("		self.debugmsg(5, 'self.msg: ', self.msg)")
 		fd.append("		")
 		fd.append("		ResultName = ''")
 		# fd.append("		#	'level': 'TRACE'")
 		fd.append("		istrace = False")
-		fd.append("		if self.msg is not None and 'level' in self.msg and self.msg['level'] == 'TRACE':")
+		fd.append("		if self.msg is not None and self.msg.level == 'TRACE':")
 		fd.append("			istrace = True")
 		fd.append("		")
-		fd.append("		if self.msg is not None and 'message' in self.msg and not istrace:")
-		fd.append("			ResultName = self.msg['message']")
-		fd.append("		elif 'doc' in attrs and len(attrs['doc'])>0:")
-		fd.append("			ResultName = attrs['doc']")
-		# Quiet Keyword -> https://github.com/damies13/rfswarm/blob/master/Doc/Preparing_for_perf.md#keywords
-		# fd.append("		elif '${' not in name:")
-		# fd.append("			ResultName = name")
+		fd.append("		iter = BuiltIn().get_variable_value(\"${RFS_ITERATION}\")")
+
+		# 'dflt': "Default",
+		fd.append("		if self.resultnamemode == 'dflt':")
+		fd.append("			if self.msg is not None and not istrace:")
+		fd.append("				ResultName = self.msg.message")
+		fd.append("			elif 'doc' in attrs and len(attrs['doc'])>0:")
+		fd.append("				self.debugmsg(5, 'attrs[doc]: ', attrs['doc'])")
+		fd.append("				ResultName = attrs['doc']")
+		# 'doco': "Documentation",
+		fd.append("		if self.resultnamemode == 'doco':")
+		fd.append("			if 'doc' in attrs and len(attrs['doc'])>0:")
+		fd.append("				self.debugmsg(5, 'attrs[doc]: ', attrs['doc'])")
+		fd.append("				ResultName = attrs['doc']")
+		# 'info': "Information",
+		fd.append("		if self.resultnamemode == 'info':")
+		fd.append("			if self.msg is not None:")
+		fd.append("				ResultName = self.msg.message")
+		# 'kywrd': "Keyword",
+		fd.append("		if self.resultnamemode == 'kywrd':")
+		fd.append("			ResultName = data.name")
+		# "kywrdargs": "Keyword & Arguments"
+		fd.append("		if self.resultnamemode == 'kywrdargs':")
+		fd.append("			lResultName = [data.name]")
+		fd.append("			if 'args' in attrs:")
+		fd.append("				for arg in attrs['args']:")
+		fd.append("					lResultName.append(arg)")
+		fd.append("			ResultName = ' '.join(lResultName)")
+
 		fd.append("		self.debugmsg(3, 'ResultName: ', ResultName, '	:', len(ResultName))")
 		fd.append("		")
+		fd.append("		if 'owner' not in attrs:")
+		fd.append("			attrs['owner'] = 'None'")
+		fd.append("		")
 		fd.append("		if len(ResultName)>0:")
-		fd.append("			self.debugmsg(8, 'self.msg: attrs[libname]: ', attrs['libname'], '	excludelibraries:', self.excludelibraries)")
-		fd.append("			if attrs['libname'] not in self.excludelibraries:")
-		fd.append("				self.debugmsg(5, attrs['libname'], 'library OK')")
+		fd.append("			self.debugmsg(8, 'self.msg: attrs[owner]: ', attrs['owner'], '	excludelibraries:', self.excludelibraries)")
+		fd.append("			if attrs['owner'] not in self.excludelibraries:")
+		fd.append("				self.debugmsg(5, attrs['owner'], 'library OK')")
 		fd.append("				self.seq += 1")
 		fd.append("				self.debugmsg(8, 'self.seq: ', self.seq)")
-		fd.append("				startdate = datetime.strptime(attrs['starttime'], '%Y%m%d %H:%M:%S.%f')")
-		fd.append("				enddate = datetime.strptime(attrs['endtime'], '%Y%m%d %H:%M:%S.%f')")
+		fd.append("				self.debugmsg(8, 'elapsed_time: ', attrs['elapsed_time'])")
+		fd.append("				self.debugmsg(8, 'start_time: ', attrs['start_time'])")
+		fd.append("				startdate = datetime.strptime(attrs['start_time'], '%Y-%m-%dT%H:%M:%S.%f')")
+		fd.append("				enddate = datetime.fromtimestamp(startdate.timestamp() + attrs['elapsed_time'])")
+		fd.append("				self.debugmsg(8, 'startdate: ', enddate, enddate.timestamp())")
 		fd.append("				self.debugmsg(5, 'Send ResultName: ', ResultName)")
 		fd.append("				payload = {")
-		fd.append("					'AgentName': '"+self.agentname+"',")
+		fd.append("					'AgentName': '" + self.agentname + "',")
 		fd.append("					'ResultName': ResultName,")
 		fd.append("					'Result': attrs['status'],")
-		fd.append("					'ElapsedTime': (attrs['elapsedtime']/1000),")
+		fd.append("					'ElapsedTime': attrs['elapsed_time'],")
 		fd.append("					'StartTime': startdate.timestamp(),")
 		fd.append("					'EndTime': enddate.timestamp(),")
 		fd.append("					'ScriptIndex': self.index,")
 		fd.append("					'Robot': self.robot,")
-		fd.append("					'Iteration': self.iter,")
+		fd.append("					'Iteration': iter,")
 		fd.append("					'Sequence': self.seq")
 		fd.append("				}")
 		fd.append("				self.debugmsg(7, 'payload: ', payload)")
 		# fd.append("				self.send_result(payload)")
 		fd.append("				t = threading.Thread(target=self.send_result, args=(payload,))")
 		fd.append("				t.start()")
+		fd.append("")
+		fd.append("				self.debugmsg(7, 'injectsleep: ', self.injectsleep)")
+		fd.append("				if str(self.injectsleep).lower() in ('true', 't', 'yes', '1'):")
+		fd.append("					self.debugmsg(8, 'data.to_dict(): ', data.to_dict())")
+		fd.append("					if 'lineno' in data.to_dict():")
+		fd.append("						tmeslp = self.randsleep(self.sleepminimum, self.sleepmaximum)")
+		fd.append("						self.debugmsg(7, 'tmeslp: ', tmeslp)")
+		fd.append("						index = data.parent.to_dict()['body'].index(data.to_dict())")
+		fd.append("						self.debugmsg(7, 'index: ', index)")
+		fd.append("						data.parent.body.insert(index + 1, running.Keyword('Sleep', [tmeslp, 'Sleep added by RFSwarm']))")
+		fd.append("")
 		fd.append("			else:")
-		fd.append("				self.debugmsg(5, attrs['libname'], 'is an excluded library')")
+		fd.append("				self.debugmsg(5, attrs['owner'], 'is an excluded library')")
 		fd.append("		")
 		fd.append("		self.msg = None")
+		fd.append("")
+		fd.append("	def randsleep(self, min, max):")
+		fd.append("		isfloat = False")
+		fd.append("		if '.' in str(min) or '.' in str(max):")
+		fd.append("			isfloat = True")
+		fd.append("		if isfloat:")
+		fd.append("			return random.uniform(float(min), float(max))")
+		fd.append("		else:")
+		fd.append("			return random.randint(int(min), int(max))")
 		fd.append("")
 		fd.append("	def debugmsg(self, lvl, *msg):")
 		fd.append("		msglst = []")
@@ -1421,9 +1977,293 @@ class RFSwarmAgent():
 		fd.append("			self.debugmsg(0, 'send_result: Exception:', exceptn)")
 		fd.append("")
 
+		# print("RFSwarmAgent: create_listner_file: listenerfile: ", self.listenerfile)
+		with open(self.listenerfile, 'w+', encoding="utf-8") as lf:
+			# lf.writelines(fd)
+			lf.write('\n'.join(fd))
+
+	def create_V2_listner_file(self):
+
+		self.listenerfile = os.path.join(self.scriptdir, "RFSListener2.py")
+		self.debugmsg(5, "listenerfile", self.listenerfile)
+
+		fd = []
+		fd.append("")
+		fd.append("import os")
+		fd.append("import tempfile")
+		fd.append("import sys")
+		fd.append("import socket")
+		fd.append("from datetime import datetime")
+		fd.append("import time")
+		fd.append("import random")
+		fd.append("import requests")
+		fd.append("import inspect")
+		fd.append("import threading")
+		fd.append("from robot.libraries.BuiltIn import BuiltIn")
+		fd.append("")
+		fd.append("class RFSListener2:")
+		fd.append("	ROBOT_LISTENER_API_VERSION = 2")
+		fd.append("")
+		fd.append("	msg = None")
+		fd.append("	swarmmanager = \"http://localhost:8138/\"")
+		fd.append("	excludelibraries = [\"BuiltIn\",\"String\",\"OperatingSystem\",\"perftest\"]")
+		fd.append("	resultnamemode = \"dflt\"")
+		fd.append("	debuglevel = 0")
+		fd.append("	index = 0")
+		fd.append("	robot = 0")
+		fd.append("	iter = 0")
+		fd.append("	seq = 0")
+		fd.append("	injectsleep = False")
+		fd.append("	sleepminimum = 15")
+		fd.append("	sleepmaximum = 45")
+		fd.append("")
+		fd.append("	def start_suite(self, name, attrs):")
+		fd.append("		if 'RFS_DEBUGLEVEL' in attrs['metadata']:")
+		fd.append("			self.debuglevel = int(attrs['metadata']['RFS_DEBUGLEVEL'])")
+		fd.append("			self.debugmsg(6, 'debuglevel: ', self.debuglevel)")
+		fd.append("		if 'RFS_INDEX' in attrs['metadata']:")
+		fd.append("			self.index = attrs['metadata']['RFS_INDEX']")
+		fd.append("			self.debugmsg(6, 'index: ', self.index)")
+		fd.append("		if 'RFS_ITERATION' in attrs['metadata']:")
+		fd.append("			self.iter = attrs['metadata']['RFS_ITERATION']")
+		fd.append("			self.debugmsg(6, 'iter: ', self.iter)")
+		fd.append("		if 'RFS_ROBOT' in attrs['metadata']:")
+		fd.append("			self.robot = attrs['metadata']['RFS_ROBOT']")
+		fd.append("			self.debugmsg(6, 'robot: ', self.robot)")
+		fd.append("		if 'RFS_SWARMMANAGER' in attrs['metadata']:")
+		fd.append("			self.swarmmanager = attrs['metadata']['RFS_SWARMMANAGER']")
+		fd.append("			self.debugmsg(6, 'swarmmanager: ', self.swarmmanager)")
+		fd.append("		if 'RFS_EXCLUDELIBRARIES' in attrs['metadata']:")
+		fd.append("			self.excludelibraries = attrs['metadata']['RFS_EXCLUDELIBRARIES'].split(\",\")")
+		fd.append("			self.debugmsg(6, 'excludelibraries: ', self.excludelibraries)")
+		fd.append("		if 'RFS_INJECTSLEEP' in attrs['metadata']:")
+		fd.append("			self.injectsleep = attrs['metadata']['RFS_INJECTSLEEP']")
+		fd.append("			self.debugmsg(6, 'injectsleep: ', self.injectsleep)")
+		fd.append("		if 'RFS_SLEEPMINIMUM' in attrs['metadata']:")
+		fd.append("			self.sleepminimum = attrs['metadata']['RFS_SLEEPMINIMUM']")
+		fd.append("			self.debugmsg(6, 'sleepminimum: ', self.sleepminimum)")
+		fd.append("		if 'RFS_SLEEPMAXIMUM' in attrs['metadata']:")
+		fd.append("			self.sleepmaximum = attrs['metadata']['RFS_SLEEPMAXIMUM']")
+		fd.append("			self.debugmsg(6, 'sleepmaximum: ', self.sleepmaximum)")
+		fd.append("		if 'RFS_RESULTNAMEMODE' in attrs['metadata']:")
+		fd.append("			self.resultnamemode = attrs['metadata']['RFS_RESULTNAMEMODE']")
+		fd.append("			self.debugmsg(6, 'resultnamemode: ', self.resultnamemode)")
+		fd.append("		self.seedseed()")
+		fd.append("")
+		fd.append("	def seedseed(self):")
+		fd.append("		random.seed()")
+		fd.append("		r1 = random.random()%1000")
+		fd.append("		random.seed(r1)")
+		fd.append("		r2 = random.random()%10000")
+		fd.append("		random.seed(r2)")
+		fd.append("")
+		fd.append("	def log_message(self, message):")
+		# fd.append("		self.debugmsg(8, 'message[\\'message\\']: ', message['message'])")
+		# fd.append("		self.debugmsg(8, 'message[\\'message\\'][0:2]: ', message['message'][0:2])")
+		fd.append("		if message['message'][0:2] != '${':")
+		fd.append("			self.msg = None")
+		fd.append("			self.msg = message")
+		# fd.append("			self.debugmsg(6, 'message: ', message)")
+		# fd.append("			self.debugmsg(6, 'self.msg: ', self.msg)")
+		fd.append("")
+		fd.append("	def end_keyword(self, name, attrs):")
+		fd.append("		self.debugmsg(3, 'Keyword name: ', name)")
+		fd.append("		self.debugmsg(8, 'attrs: ', attrs)")
+		fd.append("		self.debugmsg(5, 'attrs[doc]: ', attrs['doc'])")
+		fd.append("		self.debugmsg(5, 'self.msg: ', self.msg)")
+		fd.append("		")
+		fd.append("		ResultName = ''")
+		# fd.append("		#	'level': 'TRACE'")
+		fd.append("		istrace = False")
+		fd.append("		if self.msg is not None and 'level' in self.msg and self.msg['level'] == 'TRACE':")
+		fd.append("			istrace = True")
+		fd.append("		")
+		fd.append("		iter = BuiltIn().get_variable_value(\"${RFS_ITERATION}\")")
+
+		# 'dflt': "Default",
+		fd.append("		if self.resultnamemode == 'dflt':")
+		fd.append("			if self.msg is not None and 'message' in self.msg and not istrace:")
+		fd.append("				ResultName = self.msg['message']")
+		fd.append("			elif 'doc' in attrs and len(attrs['doc'])>0:")
+		fd.append("				ResultName = attrs['doc']")
+		# 'doco': "Documentation",
+		fd.append("		if self.resultnamemode == 'doco':")
+		fd.append("			if 'doc' in attrs and len(attrs['doc'])>0:")
+		fd.append("				ResultName = attrs['doc']")
+		# 'info': "Information",
+		fd.append("		if self.resultnamemode == 'info':")
+		fd.append("			if self.msg is not None and 'message' in self.msg:")
+		fd.append("				ResultName = self.msg['message']")
+		# 'kywrd': "Keyword",
+		fd.append("		if self.resultnamemode == 'kywrd':")
+		# fd.append("			ResultName = name")		# returns library.keyword
+		fd.append("			self.debugmsg(8, self.resultnamemode, 'kwname: ', attrs['kwname'])")
+		fd.append("			ResultName = attrs['kwname']")
+		# "kywrdargs": "Keyword & Arguments"
+		fd.append("		if self.resultnamemode == 'kywrdargs':")
+		# fd.append("			lResultName = [name]")		# returns library.keyword
+		fd.append("			self.debugmsg(8, self.resultnamemode, 'kwname: ', attrs['kwname'])")
+		fd.append("			lResultName = [attrs['kwname']]")
+		fd.append("			self.debugmsg(3, 'lResultName: ', lResultName)")
+		fd.append("			if 'args' in attrs:")
+		fd.append("				for arg in attrs['args']:")
+		fd.append("					lResultName.append(arg)")
+		fd.append("			self.debugmsg(8, 'lResultName: ', lResultName)")
+		fd.append("			ResultName = ' '.join(lResultName)")
+
+		fd.append("		self.debugmsg(3, 'ResultName: ', ResultName, '	:', len(ResultName))")
+		fd.append("		")
+		fd.append("		if len(ResultName)>0:")
+		fd.append("			self.debugmsg(8, 'self.msg: attrs[libname]: ', attrs['libname'], '	excludelibraries:', self.excludelibraries)")
+		fd.append("			if attrs['libname'] not in self.excludelibraries:")
+		fd.append("				self.debugmsg(5, attrs['libname'], 'library OK')")
+		fd.append("				self.seq += 1")
+		fd.append("				self.debugmsg(8, 'self.seq: ', self.seq)")
+		fd.append("				startdate = datetime.strptime(attrs['starttime'], '%Y%m%d %H:%M:%S.%f')")
+		fd.append("				enddate = datetime.strptime(attrs['endtime'], '%Y%m%d %H:%M:%S.%f')")
+		fd.append("				self.debugmsg(5, 'Send ResultName: ', ResultName)")
+		fd.append("				payload = {")
+		fd.append("					'AgentName': '" + self.agentname + "',")
+		fd.append("					'ResultName': ResultName,")
+		fd.append("					'Result': attrs['status'],")
+		fd.append("					'ElapsedTime': (attrs['elapsedtime']/1000),")
+		fd.append("					'StartTime': startdate.timestamp(),")
+		fd.append("					'EndTime': enddate.timestamp(),")
+		fd.append("					'ScriptIndex': self.index,")
+		fd.append("					'Robot': self.robot,")
+		fd.append("					'Iteration': iter,")
+		fd.append("					'Sequence': self.seq")
+		fd.append("				}")
+		fd.append("				self.debugmsg(7, 'payload: ', payload)")
+		# fd.append("				self.send_result(payload)")
+		fd.append("				t = threading.Thread(target=self.send_result, args=(payload,))")
+		fd.append("				t.start()")
+		fd.append("")
+		fd.append("				self.debugmsg(7, 'injectsleep: ', self.injectsleep)")
+		fd.append("				if str(self.injectsleep).lower() in ('true', 't', 'yes', '1'):")
+		fd.append("					tmeslp = self.randsleep(self.sleepminimum, self.sleepmaximum)")
+		fd.append("					self.debugmsg(7, 'tmeslp: ', tmeslp)")
+		fd.append("					BuiltIn().run_keyword('Sleep', tmeslp, 'Sleep added by RFSwarm')")
+		fd.append("")
+		fd.append("			else:")
+		fd.append("				self.debugmsg(5, attrs['libname'], 'is an excluded library')")
+		fd.append("		")
+		fd.append("		self.msg = None")
+		fd.append("")
+		fd.append("	def randsleep(self, min, max):")
+		fd.append("		isfloat = False")
+		fd.append("		if '.' in str(min) or '.' in str(max):")
+		fd.append("			isfloat = True")
+		fd.append("		if isfloat:")
+		fd.append("			return random.uniform(float(min), float(max))")
+		fd.append("		else:")
+		fd.append("			return random.randint(int(min), int(max))")
+		fd.append("")
+		fd.append("	def debugmsg(self, lvl, *msg):")
+		fd.append("		msglst = []")
+		fd.append("		prefix = \"\"")
+		fd.append("		if self.debuglevel >= lvl:")
+		fd.append("			try:")
+		fd.append("				if self.debuglevel >= 4:")
+		fd.append("					stack = inspect.stack()")
+		fd.append("					the_class = stack[1][0].f_locals[\"self\"].__class__.__name__")
+		fd.append("					the_method = stack[1][0].f_code.co_name")
+		fd.append("					prefix = \"{}: {}: [{}:{}]	\".format(str(the_class), the_method, self.debuglevel, lvl)")
+		fd.append("					if len(prefix.strip())<32:")
+		fd.append("						prefix = \"{}	\".format(prefix)")
+		fd.append("					if len(prefix.strip())<24:")
+		fd.append("						prefix = \"{}	\".format(prefix)")
+		fd.append("					msglst.append(str(prefix))")
+		fd.append("				for itm in msg:")
+		fd.append("					msglst.append(str(itm))")
+		fd.append("				print(\" \".join(msglst))")
+		fd.append("			except:")
+		fd.append("				pass")
+		fd.append("")
+		fd.append("	def send_result(self, payload):")
+		fd.append("		exceptn = None")
+		fd.append("		retry = True")
+		fd.append("		count = 100")
+		fd.append("		uri = self.swarmmanager + 'Result'")
+		fd.append("		while retry and count>0:")
+		fd.append("			try:")
+		fd.append("				r = requests.post(uri, json=payload, timeout=600)")
+		fd.append("				self.debugmsg(7, 'send_result: ',r.status_code, r.text)")
+		fd.append("				if (r.status_code != requests.codes.ok):")
+		fd.append("					exceptn = r.status_code")
+		fd.append("				else:")
+		fd.append("					retry = False")
+		fd.append("			except Exception as e:")
+		fd.append("				exceptn = e")
+		fd.append("			time.sleep(1)")
+		fd.append("			count -= 1")
+		fd.append("		if retry:")
+		fd.append("			self.debugmsg(0, 'send_result: while attempting to send result to', uri)")
+		fd.append("			self.debugmsg(0, 'send_result: with payload:', payload)")
+		fd.append("			self.debugmsg(0, 'send_result: Exception:', exceptn)")
+		fd.append("")
 
 		# print("RFSwarmAgent: create_listner_file: listenerfile: ", self.listenerfile)
-		with open(self.listenerfile, 'w+') as lf:
+		with open(self.listenerfile, 'w+', encoding="utf-8") as lf:
+			# lf.writelines(fd)
+			lf.write('\n'.join(fd))
+
+	def create_repeater_listner_file(self):
+		self.repeaterfile = os.path.join(self.scriptdir, "RFSTestRepeater.py")
+
+		fd = []
+		fd.append("")
+		fd.append("from robot.libraries.BuiltIn import BuiltIn")
+		fd.append("")
+		fd.append("import time")
+		fd.append("import os")
+		fd.append("import json")
+		fd.append("")
+		fd.append("class RFSTestRepeater:")
+		fd.append("	ROBOT_LISTENER_API_VERSION = 3")
+		fd.append("")
+		fd.append("	testname = None")
+		fd.append("	count = 0")
+		fd.append("")
+		fd.append("	def end_test(self, test, result):")
+		fd.append("")
+		fd.append("		jobdata = {}")
+		fd.append("		index = test.parent.metadata['RFS_INDEX']")
+		fd.append("		robot = test.parent.metadata['RFS_ROBOT']")
+		fd.append("		scriptdir = os.path.dirname(__file__)")
+		fd.append("		jobfile = os.path.join(scriptdir, \"RFS_Job_{}_{}.json\".format(index, robot))")
+		fd.append("")
+		fd.append("		if os.path.exists(jobfile):")
+		fd.append("			with open(jobfile, 'r') as f:")
+		fd.append("				jobdata = json.load(f)")
+		fd.append("")
+		fd.append("		self.count += 1")
+		fd.append("		newiteration = \"{}_{}\".format(test.parent.metadata['RFS_ITERATION'], self.count)")
+		fd.append("		BuiltIn().set_suite_variable(\"${RFS_ITERATION}\", newiteration)")
+		fd.append("")
+		fd.append("		if int(time.time()) < jobdata[\"EndTime\"]:")
+		fd.append("			if self.testname is None:")
+		fd.append("				self.testname = test.name")
+		fd.append("			newname = \"{} {}\".format(self.testname, newiteration)")
+		fd.append("			copy = test.copy(name=newname)")
+		fd.append("			test.parent.tests.append(copy)")
+		fd.append("")
+
+		rfver = self.agentproperties["RobotFramework"]
+		if int(rfver[0]) >= 7:
+			fd.append("	def start_keyword(self, data, result):")
+			fd.append("		# This prevents the error:")
+			fd.append("		# [ ERROR ] Calling method 'start_keyword' of listener 'TestRepeater.py' failed: TypeError: end_suite() takes 2 positional arguments but 3 were given")
+			fd.append("		pass")
+			fd.append("")
+			fd.append("	def end_keyword(self, data, result):")
+			fd.append("		# This prevents the error:")
+			fd.append("		# [ ERROR ] Calling method 'end_keyword' of listener 'TestRepeater.py' failed: TypeError: end_suite() takes 2 positional arguments but 3 were given")
+			fd.append("		pass")
+			fd.append("")
+
+		# print("RFSwarmAgent: create_listner_file: listenerfile: ", self.listenerfile)
+		with open(self.repeaterfile, 'w+', encoding="utf-8") as lf:
 			# lf.writelines(fd)
 			lf.write('\n'.join(fd))
 
@@ -1435,23 +2275,32 @@ class RFSwarmAgent():
 			self.debugmsg(3, "Join Agent Thread:", thread)
 			self.corethreads[thread].join()
 
-
 		for jobid in self.jobs:
 			# self.jobs[jobid]["Thread"]
-			# base.debugmsg(3, "Join Agent Manager Thread")
-			# base.Agentserver.join()
+			# self.debugmsg(3, "Join Agent Manager Thread")
+			# self.Agentserver.join()
 
 			self.debugmsg(3, "Join Agent Thread:", jobid)
 			self.jobs[jobid]["Thread"].join()
 
-		self.debugmsg(3, "Exit")
+		time.sleep(1)
+		self.debugmsg(2, "Exit")
 		try:
 			sys.exit(0)
-		except SystemExit:
+		except SystemExit as e:
 			try:
-				os._exit(0)
-			except:
-				pass
+				remaining_threads = [t for t in threading.enumerate() if t is not threading.main_thread() and t.is_alive()]
+				if remaining_threads:
+					self.debugmsg(5, "Failed to gracefully exit RFSwarm-Agent. Forcing immediate exit.")
+					for thread in remaining_threads:
+						self.debugmsg(9, "Thread name:", thread.name)
+					os._exit(0)
+				else:
+					raise e
+
+			except Exception as e:
+				self.debugmsg(3, "Failed to exit with error:", e)
+				os._exit(1)
 
 
 class RFSwarm():
@@ -1467,4 +2316,4 @@ except KeyboardInterrupt:
 	rfsa.on_closing()
 
 except Exception as e:
-	self.debugmsg(1, "rfsa.Exception:", e)
+	rfsa.debugmsg(1, "rfsa.Exception:", e)

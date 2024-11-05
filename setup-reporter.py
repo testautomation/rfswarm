@@ -1,11 +1,11 @@
 import setuptools
 
-with open("README_PyPi.md", "r") as fh:
+with open("README_PyPi.md", "r", encoding="utf-8") as fh:
 	long_description = fh.read()
 
 setuptools.setup(
 	name="rfswarm-reporter",
-	version = "1.0.3",
+	version="1.4.0",
 	author="damies13",
 	author_email="damies13+rfswarm@gmail.com",
 	description="rfswarm reporter",
@@ -18,9 +18,19 @@ setuptools.setup(
 	# https://matplotlib.org/stable/users/installing.html
 	# zoneinfo requires python 3.9
 	# tzlocal is needed to get the local timezone in a format that zoneinfo likes
-	install_requires=['configparser', 'pillow>=9.1.0', 'pip>=21,>=22', 'matplotlib', 'python-docx', 'openpyxl', 'tzlocal>=4.1'],
+	data_files=[
+		('rfswarm_reporter/icons', ['rfswarm_reporter/icons/rfswarm-reporter-128.png']),
+		('rfswarm_reporter/icons', ['rfswarm_reporter/icons/rfswarm-reporter-128.ico']),
+		('rfswarm_reporter/icons', ['rfswarm_reporter/icons/rfswarm-reporter-1024.png']),
+		('rfswarm_reporter/icons', ['rfswarm_reporter/icons/rfswarm-logo-128.png']),
+		('rfswarm_reporter/icons', ['rfswarm_reporter/icons/rfswarm-logo-128.ico']),
+	],
+	include_package_data=True,
+	install_requires=['configparser', 'pillow>=9.1.0', 'pip>=21,>=22', 'matplotlib', 'python-docx', 'openpyxl', 'tzlocal>=4.1', 'lxml'],
 	classifiers=[
 		"Development Status :: 5 - Production/Stable",
+		"Framework :: Robot Framework",
+		"Framework :: Robot Framework :: Tool",
 		"Topic :: Software Development :: Testing",
 		"Programming Language :: Python :: 3.9",
 		"License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
@@ -32,5 +42,7 @@ setuptools.setup(
 		'Say Thanks!': 'https://github.com/damies13/rfswarm#donations',
 		'Source': 'https://github.com/damies13/rfswarm',
 	},
-	entry_points = {'console_scripts': ['rfswarm-reporter = rfswarm_reporter.rfswarm_reporter:RFSwarm']},
+	entry_points={'console_scripts': ['rfswarm-reporter = rfswarm_reporter.rfswarm_reporter:RFSwarm']},
+	# this breaks console logs
+	# entry_points={'gui_scripts': ['rfswarm-reporter = rfswarm_reporter.rfswarm_reporter:RFSwarm']},
 )

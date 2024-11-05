@@ -1,0 +1,7 @@
+*.html
+*.docx
+*.xlsx
+*.report
+!**/logs/*/*.xml
+!**/logs/*/*.html
+!Issue*/**/*.report

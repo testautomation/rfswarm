@@ -1,23 +1,22 @@
 
-[Index](README.md)
+# Agent Communication
+[Return to Index](README.md)
 
-## Agent Communication
+In this page the generic hostnames manager and myagent are used, replace manager with the hostname of the machine that is running rfswarm.py and myagent with the hostname of the machine that is running rfswarm_agent.py
 
-In this page the generic host names manager and myagent are used, replace manager with the host name of the machine that is running rfswarm.py and myagent with the host name of the machine that is running rfswarm_agent.py
-
-- [Get /](#Get-)
-- [POST /AgentStatus](#POST-AgentStatus)
-- [POST /Jobs](#POST-Jobs)
-- [POST /Scripts](#POST-Scripts)
-- [POST /File](#POST-File)
-- [POST /Result](#POST-Result)
+- [Get /](#get-)
+- [POST /AgentStatus](#post-agentstatus)
+- [POST /Jobs](#post-jobs)
+- [POST /Scripts](#post-scripts)
+- [POST /File](#post-file)
+- [POST /Result](#post-result)
 - [POST /Metric](#post-metric)
 
-### Get /
-HTTP GET http://manager:8138/
+## Get /
+HTTP GET `http://manager:8138/`
 
 Response Body:
-```
+```json
 {
     "POST": {
         "AgentStatus": {
@@ -89,11 +88,11 @@ Response Body:
 }
 ```
 
-### POST /AgentStatus
-HTTP POST http://manager:8138/AgentStatus
+## POST /AgentStatus
+HTTP POST `http://manager:8138/AgentStatus`
 
 Request Body:
-```
+```json
 {
     "AgentName": "myagent",
     "Status": "Ready",
@@ -106,32 +105,42 @@ Request Body:
 ```
 
 Response Body:
-```
+```json
 {
     "AgentName": "myagent",
     "Status": "Updated"
 }
 ```
 
-### POST /Jobs
-HTTP POST http://manager:8138/Jobs
+## POST /Jobs
+HTTP POST `http://manager:8138/Jobs`
 
 Request Body:
-```
+```json
 {
     "AgentName": "myagent"
 }
 ```
 
 Response Body:
-```
+```json
 {
     "AgentName": "myagent",
     "StartTime": 1572057404,
     "EndTime": 1572064628,
     "RunName": "Scenario_1572057404",
-	"Abort": false,
-	"UploadMode": "err",
+    "Abort": false,
+    "UploadMode": "err",
+    "EnvironmentVariables": {
+        "user_path_var": {
+            "vartype": "path",
+            "value": "user_dir"
+        },
+        "user_var": {
+            "vartype": "value",
+            "value": "TWELVE"
+        }
+    },
     "Schedule": {
         "1_1": {
             "ScriptHash": "c4307dee904afe7df89fa33d193a7d30",
@@ -151,18 +160,18 @@ Response Body:
 }
 ```
 
-### POST /Scripts
-HTTP POST http://manager:8138/Scripts
+## POST /Scripts
+HTTP POST `http://manager:8138/Scripts`
 
 Request Body:
-```
+```json
 {
     "AgentName": "myagent"
 }
 ```
 
 Response Body:
-```
+```json
 {
     "AgentName": "myagent",
     "Scripts": [
@@ -182,11 +191,11 @@ Response Body:
 }
 ```
 
-### POST /File
-HTTP POST http://manager:8138/File
+## POST /File
+HTTP POST `http://manager:8138/File`
 
 Request Bodies:
-```
+```json
 {
     "AgentName": "myagent",
     "Action": "Download",
@@ -211,7 +220,7 @@ Request Bodies:
 ```
 
 Response Body:
-```
+```json
 {
     "AgentName": "myagent",
     "Hash": "33d193a7d30904afec4307dee7df89fa",
@@ -235,11 +244,11 @@ Response Body:
 }
 ```
 
-### POST /Result
-HTTP POST http://manager:8138/Result
+## POST /Result
+HTTP POST `http://manager:8138/Result`
 
 Request Body:
-```
+```json
 {
     "AgentName": "myagent",
     "ResultName": "Page title is \"Your Store\".",
@@ -255,19 +264,20 @@ Request Body:
 ```
 
 Response Body:
-```
+```json
 {
     "AgentName": "myagent",
     "Result": "Queued"
 }
 ```
 
-### POST /Metric
-HTTP POST http://manager:8138/Metric
+## POST /Metric
+HTTP POST `http://manager:8138/Metric`
 
 Request Body:
-```
+```json
 {
+    "AgentName": "myagent",
     "PrimaryMetric": "my_aut_server",
     "MetricType": "AUT Web",
     "MetricTime": "1609924920",
@@ -300,7 +310,7 @@ Request Body:
 ```
 
 Response Body:
-```
+```json
 {
     "Metric": "my_aut_server",
     "Result": "Queued"

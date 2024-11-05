@@ -2,7 +2,7 @@
 
 
 ## About
-rfswarm is a testing tool that allows you use [Robot Framework](https://robotframework.org/) test cases for performance or load testing.
+rfswarm is a testing tool that allows you to use [Robot Framework](https://robotframework.org/) test cases for performance or load testing.
 
 > _Swarm being the collective noun for Robots, just as Flock is for Birds and Herd for Sheep, so it made sense to use swarm for a performance testing tool using Robot Framework, hence rfswarm_
 
@@ -21,19 +21,20 @@ To learn more about rfswarm please refer to the [Documentation](https://github.c
 
 - [rfswarm Documentation](https://github.com/damies13/rfswarm/blob/master/Doc/README.md)
 - [Discord](https://discord.gg/jJfCMrqCsT)
+- [Slack](https://robotframework.slack.com/archives/C06J2Q0LGEM)
 - [Reporting Issues / Known Issues](https://github.com/damies13/rfswarm/issues)
 
 <kbd align="centre">
-<img align="centre" height="350" src="Doc/Images/Manager&Agent_Example.png">
+<img align="centre" height="350" alt="Manager and Agent" src="https://github.com/damies13/rfswarm/blob/master/Doc/Images/Manager&Agent_Example.png">
 </kbd><br>
 An example of how your rfswarm setup might look.
 
 ### Commercial Support
-- The easiest way to get commercial support is to sponsor this project on [Github](https://github.com/sponsors/damies13?frequency=recurring&sponsor=damies13)
+- The easiest way to get commercial support is to sponsor this project on [GitHub](https://github.com/sponsors/damies13?frequency=recurring&sponsor=damies13)
 
 
 ## Donations
 
 If you would like to thank me for this project please consider using one of the sponsorship methods:
-- [Github](https://github.com/sponsors/damies13/)
+- [GitHub](https://github.com/sponsors/damies13/)
 - [PayPal.me](https://paypal.me/damies13/5) (the $5 is a suggestion, feel free to change to any amount you would like)
